@@ -15,7 +15,7 @@ pub struct Clause {
     literals: Vec<Literal>,
     /// A flag indicating whether or not this clause originates from the problem definition or if
     /// it was learned during search
-    pub is_learned: bool
+    pub is_learned: bool,
 }
 
 impl Clause {
@@ -40,6 +40,36 @@ impl Clause {
         out.push_str("0");
         return out;
     }
+
+    pub fn remove_lit(&mut self, l: Literal){
+        let pos = self.iter().position(|x| *x == l).unwrap();
+        (*self).remove(pos);
+        /*
+        return;
+
+        let mut idx = 0;
+        let mut found = false;
+        for lit in (*self).iter(){
+            if *lit == l{
+                found = true;
+                break
+            }
+            idx+=1;
+        }
+        if found{
+            (*self).swap_remove(idx);
+        }*/
+    }
+
+    pub fn contains_lit(&self, l: Literal) -> bool{
+        for lit in (*self).iter(){
+            if *lit == l{
+                return true;
+            }
+        }
+        return false
+    }
+
 }
 
 impl Deref for Clause {
@@ -116,5 +146,20 @@ mod tests {
 
         assert_eq!("Clause([Literal(1), Literal(4), Literal(2), Literal(8)])",
                    &format!("{:?}", clause));
+    }
+
+    #[test]
+    fn remove_literals() {
+        let mut clause = Clause::new(vec![
+            Literal::from(1),
+            Literal::from(2),
+            Literal::from(4),
+            Literal::from(8)], false);
+        clause.remove_lit(Literal::from(2));
+        assert_eq!(*clause, vec![Literal::from(1),Literal::from(4),Literal::from(8)]);
+        clause.remove_lit(Literal::from(1));
+        assert_eq!(*clause, vec![Literal::from(4),Literal::from(8)]);
+        clause.remove_lit(Literal::from(8));
+        assert_eq!(*clause, vec![Literal::from(4)])
     }
 }
