@@ -1,10 +1,13 @@
 extern crate fixedbitset;
+extern crate time;
 
 use std::usize;
+use std::ops::{BitOr,BitAnd};
 
 use core::*;
 use collections::*;
 use solving::*;
+use self::time::*;
 
 use self::fixedbitset::FixedBitSet;
 
@@ -55,8 +58,16 @@ pub struct Solver {
     phase_saving : FixedBitSet,
     /// The number of clauses that can be learned before we start to try cleaning up the database
     max_learned  : usize,
-    /// The restart strategy (luby)
-    restart_strat: Luby,
+
+    /// Glucose specific
+    restart_strat: Glucose,
+
+    glucose_wind : Vec<u32>,
+
+    glucose_avg_global : f64,
+
+    glucose_size : usize,
+
 
     /// The last level at which some variable was assigned (intervenes in the LBD computation)
     level        : VarIdxVec<u32>,
@@ -93,10 +104,16 @@ pub struct Solver {
     propagated   : usize,
 
     // ~~~ # Clause Learning ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    /// clause minimization
+    nb_minimization: usize,
+    nb_learned_since_minimiation: usize,
+
     /// The reason associated with each assignment
     reason       : VarIdxVec<Option<Reason>>,
     /// The flags used during conflict analysis. One set of flag is associated with each literal.
-    flags        : LitIdxVec<Flags>
+    flags        : LitIdxVec<Flags>,
+    /// Bool to enable subsumption
+    subsume_enable: bool
 }
 
 impl Solver {
@@ -120,7 +137,11 @@ impl Solver {
             var_order: VSIDS::new(nb_vars),
             phase_saving: FixedBitSet::with_capacity(1 + nb_vars),
             max_learned: 1000,
-            restart_strat: Luby::new(100),
+            restart_strat: Glucose::new(),
+
+            glucose_size: 100, // change also next line !
+            glucose_wind: Vec::with_capacity(100), // correspond to glucose_size
+            glucose_avg_global: 0.0,
 
             level: VarIdxVec::from(vec![0; nb_vars]),
             lbd  : Vec::with_capacity(nb_clauses),
@@ -131,8 +152,12 @@ impl Solver {
             forced: 0,
             propagated: 0,
 
+            nb_minimization: 0,
+            nb_learned_since_minimiation: 0,
+
             reason: VarIdxVec::with_capacity(nb_vars),
-            flags: LitIdxVec::with_capacity(nb_vars)
+            flags: LitIdxVec::with_capacity(nb_vars),
+            subsume_enable: true
         };
 
         // initialize vectors
@@ -168,6 +193,9 @@ impl Solver {
             match self.propagate() {
                 Some(conflict) => {
                     self.nb_conflicts += 1;
+                    if self.nb_conflicts % 10 == 0{
+                        println!("conflict {}", self.nb_conflicts);
+                    }
                     self.nb_conflicts_since_restart += 1;
 
                     // if there is a conflict, I try to resolve it. But if I can't, that
@@ -326,6 +354,60 @@ impl Solver {
 
         return cursor;
     }
+    /// Used only during the learned clause minimization.
+    fn conflict_analysis(&mut self, conflict: ClauseId, base: ClauseId, new_l: Literal) -> Vec<Literal> {
+        { // mark all literals in the conflict clause
+            let ref mut conflicting = self.clauses[conflict];
+            for l in conflicting.iter() {
+                Solver::mark(*l, &mut self.flags);
+            }
+        }
+        let mut marked_lit:Vec<Literal> = Vec::new();
+        // backwards BFS rooted at the conflict to identify uip (and mark its cause)
+        let mut cursor = self.prop_queue.len();
+        loop {
+            cursor -= 1;
+
+            // Whenever we've analyzed all the literals that are not *forced* by the constraints,
+            // we can stop.
+            if cursor < self.forced { break }
+
+            // Whenever we've found a decision, we have found all literals. Hence, we can stop
+            let lit = self.prop_queue[cursor];
+            if self.is_decision(lit) {
+                break;
+            }
+
+            // otherwise, we just proceed with the rest
+            // if a literal is not marked, we don't need to care about it
+            if !self.flags[lit].is_set(Flag::IsMarked) { continue }
+
+            marked_lit.push(lit);
+
+            // otherwise, we need to mark all the literal in its antecedent. Note, we know lit is no
+            // decision literal because, if it were, the is_uip() would have been true.
+            match self.reason[lit.var()] {
+                // will never happen
+                None => panic!("{:?} is a decision (it has no reason), but is_uip() replied false"),
+                Some(c_id) => match c_id {
+                    // will not happen either
+                    CLAUSE_ELIDED => {/* Ignore */},
+                    // will always happen
+                    reason_id => {
+                        let ref mut cause = self.clauses[reason_id];
+                        for l in cause.iter().skip(1) {
+                            Solver::mark(*l, &mut self.flags);
+                        }
+                    }
+                }
+            }
+        }
+
+        return marked_lit.iter()
+            .map(|l|*l)
+            .filter(|lit| (*self.clauses[base]).contains(lit) || *lit == new_l)
+            .collect();
+    }
 
     /// Returns true iff the given `position` (index) in the trail `prop_queue` is an unique
     /// implication point (UIP). A position is an uip if:
@@ -425,7 +507,7 @@ impl Solver {
     /// Asks the restart strategy and tells if a complete restart of the search should be triggered
     #[inline]
     fn should_restart(&self) -> bool {
-        self.restart_strat.should_restart(self.nb_conflicts_since_restart)
+        self.restart_strat.should_restart(self.glucose_avg_global, &self.glucose_wind)
     }
 
     /// Restarts the search to find a better path towards the solution.
@@ -436,6 +518,7 @@ impl Solver {
         self.restart_strat.set_next_limit();
         self.nb_restarts += 1;
         self.nb_conflicts_since_restart = 0;
+        self.glucose_wind.clear();
     }
 
     // -------------------------------------------------------------------------------------------//
@@ -654,8 +737,8 @@ impl Solver {
                 return Ok(CLAUSE_ELIDED);
             }
         }
-
-        return self.add_clause(Clause::new(literals, false) );
+        let subsume = self.subsume_enable;
+        return self.add_clause( Clause::new(literals, false), subsume);
     }
 
     /// This function adds a learned clause to the database.
@@ -669,7 +752,8 @@ impl Solver {
     /// resolution (the conflict resolution strategy asserts the first literal of the learned clause
     /// and assumes that clause is added to the database).
     fn add_learned_clause(&mut self, c :Vec<Literal>) -> Result<ClauseId, ()> {
-        let result = self.add_clause(Clause::new(c, true) );
+        let subsume = self.subsume_enable;
+        let result = self.add_clause(Clause::new(c, true), subsume);
 
         if result.is_ok() && result.unwrap() != CLAUSE_ELIDED {
             self.nb_learned += 1;
@@ -678,6 +762,11 @@ impl Solver {
             let clause_id = result.unwrap();
             let lbd = self.literal_block_distance(clause_id);
             self.lbd[clause_id] = lbd;
+            self.glucose_avg_global = self.glucose_avg_global + (lbd as f64 - self.glucose_avg_global)/self.nb_learned as f64;
+            self.glucose_wind.push(lbd);
+            if self.glucose_wind.len() > self.glucose_size {
+                self.glucose_wind.swap_remove(self.nb_conflicts_since_restart % (self.glucose_size +1));
+            }
             self.lbd_recently_updated.insert(clause_id);
         }
 
@@ -752,7 +841,7 @@ impl Solver {
     /// clause was not explicitly encoded but was implicitly represented instead (this is ie useful
     /// for unit clauses). In the event where the addition of the clause would make the whole
     /// problem unsat, this method returns Err(()).
-    fn add_clause(&mut self, clause: Clause) -> Result<ClauseId, ()> {
+    fn add_clause(&mut self, clause: Clause, subsume: bool) -> Result<ClauseId, ()> {
         // Print the clause to produce the UNSAT certificate if it was required.
         if self.drat {
             println!("a {}", clause.to_dimacs());
@@ -784,6 +873,20 @@ impl Solver {
 
         self.clauses.push(clause);
         self.lbd.push(u32::max_value());
+        if subsume {
+            let start = PreciseTime::now();
+            let mut delete_clauses: Vec<ClauseId> = vec![];
+            for clause_id in 0..self.clauses.len() - 1 {
+                if self.subsuming_backward(clause_id, c_id) { delete_clauses.push(clause_id) }
+                //self.self_subsuming_resolution_forward( c_id, clause_id)
+            }
+            let end = PreciseTime::now();
+            println!("subsumption {}", start.to(end));
+
+            for cl_del in delete_clauses {
+                self.remove_clause(cl_del);
+            }
+        }
 
         if c_id >= self.lbd_recently_updated.len() {
             self.lbd_recently_updated.grow( c_id * 2 );
@@ -831,6 +934,48 @@ impl Solver {
         self.lbd_recently_updated.set(into, protected);
     }
 
+    fn clause_minimization(&mut self){
+        self.minimize();
+        self.nb_learned_since_minimiation = 0;
+        self.nb_minimization += 1;
+    }
+
+    fn minimize(&mut self){
+        for clause_id in self.clauses.len()-(self.nb_learned-self.nb_learned_since_minimiation)..self.clauses.len(){
+            //if !liveClause(clause_id) continue;
+            let clause = self.clauses[clause_id].as_slice().to_vec();
+            let len = clause.len();
+            let mut new_literals = vec![];
+            let mut conf = false;
+            for i in 0..len {
+                self.add_learned_clause(new_literals.as_slice().to_vec());
+                self.remove_clause(clause_id);
+                let lit = clause[i];
+                let conflict = self.propagate_literal(-lit);
+                if conflict.is_some(){
+                    let vec = self.conflict_analysis(conflict.unwrap(),
+                                                     clause_id, -lit);
+                    self.add_learned_clause(vec);
+                    self.remove_clause(clause_id);
+                    self.undo(-lit);
+                    conf = true;
+                    break;
+                }
+
+                self.undo(-lit);
+                let conflict = self.propagate_literal(lit);
+                if conflict.is_none(){
+                    new_literals.push(lit);
+                }
+                self.undo(lit);
+            }
+            if !conf{
+                self.add_learned_clause(new_literals);
+                self.remove_clause(clause_id);
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------------------------//
     // ---------------------------- WATCHED LITERALS ---------------------------------------------//
     // -------------------------------------------------------------------------------------------//
@@ -856,6 +1001,33 @@ impl Solver {
 
         // If the clause is already satsified, we don't need to do anything
         if self.is_true(other) { return Ok(watched); }
+
+        let clause_len = self.clauses[c_id].len();
+        for i in 2..clause_len {
+            let lit = self.clauses[c_id][i];
+
+            // not False <==> True or Unassigned
+            if !self.is_false(lit) {
+                // enforce invariant A
+                self.clauses[c_id].swap(1, i);
+                // tell that we need to start watching lit
+                return Ok(lit);
+            }
+        }
+
+        // We couldn't find any new literal to watch. Hence the clause is unit (under
+        // the current assignment) or conflicting.
+        return Err(other);
+    }
+
+    fn find_new_literal_watched_removed(&mut self, c_id: ClauseId, watched: Literal) -> Result<Literal, Literal> {
+        // Make sure that other WL is at position zero. This way, whenever the clause
+        // becomes unit, we are certain to respect invariant B.
+        if watched == self.clauses[c_id][0] {
+            self.clauses[c_id].swap(0, 1);
+        }
+
+        let other = self.clauses[c_id][0];
 
         let clause_len = self.clauses[c_id].len();
         for i in 2..clause_len {
@@ -1057,6 +1229,58 @@ impl Solver {
     }
 
     // -------------------------------------------------------------------------------------------//
+    // ---------------------------- Subsumption --------------------------------------------------//
+    // -------------------------------------------------------------------------------------------//
+    fn subsuming_backward(&mut self, id1: usize, id2: usize) -> bool {
+        assert_ne!(id1,id2);
+        let c1 = &self.clauses[id1];
+        let c2 = &self.clauses[id2];
+        let len1 = c1.len();
+        if c1.len() > c2.len() {return false; }
+        for i in 0..len1 {
+            if !c2.contains(&c1[i]){
+                return false
+            }
+        }
+        return true;
+    }
+    fn subsuming_forward(&mut self, id1: usize, id2: usize) -> bool{
+        return self.subsuming_backward(id2,id1);
+    }
+    fn self_subsuming_resolution_forward(&mut self, id1: usize, id2: usize){
+        assert_ne!(id1,id2);
+        let mut found = false;
+        let mut cond = false;
+        let mut l_remove: Literal = Literal::from(42);
+        {
+            let ref mut tab = self.clauses;
+            let ref c1 = tab[id1];
+            let ref c2 = tab[id2];
+            if c1.len() > c2.len() {return;} // TODO : directly call reverse ?
+            for lit in c1.iter(){
+                if c2.contains_lit(Literal::from_var(lit.var(), -lit.sign())) && subsumption::subsume_without_lit(c1,c2,*lit){
+                    found = true;
+                    l_remove = Literal::from_var(lit.var(), -lit.sign());
+                    break;
+                }
+            }
+            cond = c1.len() == c2.len();
+        }
+        if found {
+            if cond{
+                let ref mut c1 = self.clauses[id1];
+                if self.watchers[l_remove].contains(&id1){
+                    //self.find_new_literal(id1, l_remove)
+                }
+                c1.remove_lit(Literal::from_var(l_remove.var(), -l_remove.sign()));
+            }
+            let ref mut c2 = self.clauses[id2];
+            c2.remove_lit(l_remove);
+        }
+        return;
+    }
+
+    // -------------------------------------------------------------------------------------------//
     // ---------------------------- MISC ---------------------------------------------------------//
     // -------------------------------------------------------------------------------------------//
 
@@ -1124,6 +1348,12 @@ impl Solver {
             var_order.bump(lit.var() );
         }
     }
+    #[inline]
+    fn mark(lit : Literal, flags: &mut LitIdxVec<Flags>){
+        if !flags[lit].is_set(Flag::IsMarked) {
+            flags[lit].set(Flag::IsMarked);
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -1150,7 +1380,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         let watched = Literal::from(2);
         assert_eq!(tested.find_new_literal(0, watched), Ok(Literal::from(2)))
@@ -1173,7 +1403,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         let watched = Literal::from(1);
         assert_eq!(tested.find_new_literal(0, watched), Ok(Literal::from(1)))
@@ -1195,7 +1425,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         let watched = Literal::from(1);
         assert_eq!(tested.find_new_literal(0, watched), Ok(Literal::from(4)))
@@ -1217,7 +1447,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         let watched = Literal::from(1);
         assert_eq!(tested.find_new_literal(0, watched), Ok(Literal::from(8)))
@@ -1239,7 +1469,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause, false);
 
         let watched = Literal::from(1);
         assert_eq!(tested.find_new_literal(0, watched), Ok(Literal::from(4)))
@@ -1261,7 +1491,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         let watched = Literal::from(1);
         assert_eq!(tested.find_new_literal(0, watched), Ok(Literal::from(8)))
@@ -1283,7 +1513,7 @@ mod test_watched_literals {
             Literal::from(4),
             Literal::from(8)], false);
 
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         let watched = Literal::from(1);
         assert_eq!(tested.find_new_literal(0, watched), Err(Literal::from(2)))
@@ -1293,7 +1523,7 @@ mod test_watched_literals {
     #[should_panic]
     fn activate_must_fail_for_empty_clause() {
         let mut tested= Solver::new(8);
-        tested.add_clause(Clause::new(vec![], false));
+        tested.add_clause(Clause::new(vec![], false),false);
 
         tested.activate_clause(0);
     }
@@ -1302,7 +1532,7 @@ mod test_watched_literals {
     #[should_panic]
     fn activate_must_fail_for_unary_clause() {
         let mut tested= Solver::new(8);
-        tested.add_clause(Clause::new(vec![lit(-1)], false));
+        tested.add_clause(Clause::new(vec![lit(-1)], false),false);
 
         tested.activate_clause(0);
     }
@@ -1312,7 +1542,7 @@ mod test_watched_literals {
         let mut tested= Solver::new(8);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
         tested.deactivate_clause(0);
 
         tested.set_value(lit(-1), Bool::False);
@@ -1328,7 +1558,7 @@ mod test_watched_literals {
         let mut tested= Solver::new(8);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
         tested.deactivate_clause(0);
 
         tested.set_value(lit(-1), Bool::False);
@@ -1348,7 +1578,7 @@ mod test_watched_literals {
         let mut tested= Solver::new(8);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
         tested.deactivate_clause(0);
 
         tested.set_value(lit(-1), Bool::False);
@@ -1364,7 +1594,7 @@ mod test_watched_literals {
         let mut tested= Solver::new(8);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
         tested.deactivate_clause(0);
 
         tested.set_value(lit(-1), Bool::False);
@@ -1382,7 +1612,7 @@ mod test_watched_literals {
         tested.set_value(lit(-2), Bool::True);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
         tested.deactivate_clause(0);
 
         assert_eq!(tested.watchers[lit(-1)], &[ ]);
@@ -1401,7 +1631,7 @@ mod test_watched_literals {
         tested.set_value(lit(-2), Bool::True);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
         tested.deactivate_clause(0);
 
         assert_eq!(tested.watchers[lit(-1)], &[ ]);
@@ -1422,7 +1652,7 @@ mod test_watched_literals {
         tested.set_value(lit(-2), Bool::True);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         tested.clauses[0].clear();
         tested.deactivate_clause(0);
@@ -1436,7 +1666,7 @@ mod test_watched_literals {
         tested.set_value(lit(-2), Bool::True);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         tested.clauses[0].clear();
         tested.clauses[0].push(lit(-1));
@@ -1450,7 +1680,7 @@ mod test_watched_literals {
         tested.set_value(lit(-2), Bool::True);
 
         let clause = Clause::new(vec![lit(-1), lit(-2)], false);
-        tested.add_clause(clause);
+        tested.add_clause(clause,false);
 
         assert_eq!(tested.watchers[lit(-1)], &[0]);
         assert_eq!(tested.watchers[lit(-2)], &[0]);

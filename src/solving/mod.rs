@@ -11,8 +11,10 @@ pub const CLAUSE_ELIDED: ClauseId = usize::MAX;
 mod heuristics;
 mod flags;
 mod solver;
+pub mod inprocessing;
 
 pub use self::heuristics::*;
+pub use self::inprocessing::*;
 
 pub use self::flags::{Flag, Flags};
 pub use self::solver::Solver;
