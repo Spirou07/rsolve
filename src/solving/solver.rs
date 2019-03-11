@@ -53,7 +53,7 @@ pub struct Solver {
 
     // ~~~ # Heuristics ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     /// The variable ordering heuristic (derivative of vsids)
-    var_order    : VSIDS,
+    var_order    : ACIDS,
     /// The partial valuation remembering the last phase of each variable
     phase_saving : FixedBitSet,
     /// The number of clauses that can be learned before we start to try cleaning up the database
@@ -134,7 +134,7 @@ impl Solver {
             clauses: Vec::with_capacity(nb_clauses),
             is_unsat: false,
 
-            var_order: VSIDS::new(nb_vars),
+            var_order: ACIDS::new(nb_vars),
             phase_saving: FixedBitSet::with_capacity(1 + nb_vars),
             max_learned: 1000,
             restart_strat: Glucose::new(),
@@ -157,7 +157,7 @@ impl Solver {
 
             reason: VarIdxVec::with_capacity(nb_vars),
             flags: LitIdxVec::with_capacity(nb_vars),
-            subsume_enable: true
+            subsume_enable: false
         };
 
         // initialize vectors
@@ -193,9 +193,6 @@ impl Solver {
             match self.propagate() {
                 Some(conflict) => {
                     self.nb_conflicts += 1;
-                    if self.nb_conflicts % 10 == 0{
-                        println!("conflict {}", self.nb_conflicts);
-                    }
                     self.nb_conflicts_since_restart += 1;
 
                     // if there is a conflict, I try to resolve it. But if I can't, that
@@ -737,8 +734,8 @@ impl Solver {
                 return Ok(CLAUSE_ELIDED);
             }
         }
-        let subsume = self.subsume_enable;
-        return self.add_clause( Clause::new(literals, false), subsume);
+        return self.add_clause( Clause::new(literals, false), false);
+
     }
 
     /// This function adds a learned clause to the database.
@@ -757,7 +754,7 @@ impl Solver {
 
         if result.is_ok() && result.unwrap() != CLAUSE_ELIDED {
             self.nb_learned += 1;
-
+            self.nb_learned_since_minimiation += 1;
             // set an initial lbd for learned clauses
             let clause_id = result.unwrap();
             let lbd = self.literal_block_distance(clause_id);
@@ -847,9 +844,16 @@ impl Solver {
             println!("a {}", clause.to_dimacs());
         }
 
+        if subsume{
+            if self.forward_subsumption_clause(&clause){
+                println!("Clause subsumed");
+                return Ok(CLAUSE_ELIDED);
+            }
+        }
+
         let c_id= self.clauses.len();
 
-        // if it is the empty clause that we're adding, the problem is solved and provably unsat
+        // if it is the empty clause that we're adding, the problem is solved and probably unsat
         if clause.len() == 0 {
             self.is_unsat = true;
             return Err(());
@@ -873,6 +877,8 @@ impl Solver {
 
         self.clauses.push(clause);
         self.lbd.push(u32::max_value());
+
+        /*
         if subsume {
             let start = PreciseTime::now();
             let mut delete_clauses: Vec<ClauseId> = vec![];
@@ -886,7 +892,8 @@ impl Solver {
             for cl_del in delete_clauses {
                 self.remove_clause(cl_del);
             }
-        }
+        }*/
+
 
         if c_id >= self.lbd_recently_updated.len() {
             self.lbd_recently_updated.grow( c_id * 2 );
@@ -894,7 +901,6 @@ impl Solver {
 
         self.watchers[wl1].push(c_id);
         self.watchers[wl2].push(c_id);
-
         return Ok(c_id);
     }
 
@@ -941,38 +947,58 @@ impl Solver {
     }
 
     fn minimize(&mut self){
+        let mut remove_clauses = vec![];
         for clause_id in self.clauses.len()-(self.nb_learned-self.nb_learned_since_minimiation)..self.clauses.len(){
+
             //if !liveClause(clause_id) continue;
             let clause = self.clauses[clause_id].as_slice().to_vec();
             let len = clause.len();
-            let mut new_literals = vec![];
+            let mut neg_new_literals = vec![];
             let mut conf = false;
+            self.deactivate_clause(clause_id);
             for i in 0..len {
-                self.add_learned_clause(new_literals.as_slice().to_vec());
-                self.remove_clause(clause_id);
                 let lit = clause[i];
-                let conflict = self.propagate_literal(-lit);
+                let mut new_cid = self.clauses.len()+2;
+                if neg_new_literals.len() != 0 {
+                    match self.add_learned_clause(neg_new_literals.as_slice().to_vec()) {
+                        Err(()) => (),
+                        Ok(c) if c == CLAUSE_ELIDED => (),
+                        Ok(c_id) => {
+                            new_cid = c_id;
+                        }
+                    }
+                }
+
+                let rollback = self.prop_queue.len();
+                let conflict = self.propagate_literal(lit);
                 if conflict.is_some(){
                     let vec = self.conflict_analysis(conflict.unwrap(),
                                                      clause_id, -lit);
+                    self.rollback(rollback);
+                    if new_cid < self.clauses.len() {
+                        self.remove_clause(new_cid);
+                    }
                     self.add_learned_clause(vec);
-                    self.remove_clause(clause_id);
-                    self.undo(-lit);
+                    remove_clauses.push(clause_id);
                     conf = true;
                     break;
                 }
 
-                self.undo(-lit);
-                let conflict = self.propagate_literal(lit);
+                self.rollback(rollback);
+                let conflict = self.propagate_literal(-lit);
                 if conflict.is_none(){
-                    new_literals.push(lit);
+                    neg_new_literals.push(-lit);
                 }
-                self.undo(lit);
+                self.rollback(rollback);
+                if new_cid < self.clauses.len() {
+                    self.remove_clause(new_cid);
+                }
             }
-            if !conf{
-                self.add_learned_clause(new_literals);
-                self.remove_clause(clause_id);
-            }
+            self.activate_clause(clause_id)
+        }
+        for i in 0..remove_clauses.len(){
+            println!("removing");
+            self.remove_clause(remove_clauses[i]);
         }
     }
 
@@ -1244,6 +1270,40 @@ impl Solver {
         }
         return true;
     }
+
+    fn forward_subsumption_clause(&mut self, clause: &Clause) -> bool{
+        for id2 in (0..self.clauses.len()).rev(){
+            let clause2 = &(self.clauses[id2]);
+            if inprocessing::subsume(clause2,clause) {
+                return true;
+            }
+        }
+        return false;
+
+    }
+
+    pub fn forward_subsumption(&mut self){
+        for id in (0..self.clauses.len()).rev() {
+            if id % 1000 == 0{
+                println!("{}", id);
+            }
+            let mut del = false;
+            for id2 in (0..self.clauses.len()).rev(){
+                if id != id2{
+                    let clause = &(self.clauses[id]);
+                    let clause2 = &(self.clauses[id2]);
+                    del = inprocessing::subsume(clause2,clause);
+                }
+                if del {
+                    self.remove_clause(id);
+                    break;
+                }
+            }
+        }
+
+
+    }
+
     fn subsuming_forward(&mut self, id1: usize, id2: usize) -> bool{
         return self.subsuming_backward(id2,id1);
     }
@@ -1342,7 +1402,7 @@ impl Solver {
     /// mutably/immutably. This function solves the problem by explicily mentioning which parts of
     /// the state are required to be muted.
     #[inline]
-    fn mark_and_bump(lit : Literal, flags: &mut LitIdxVec<Flags>, var_order: &mut VSIDS ) {
+    fn mark_and_bump(lit : Literal, flags: &mut LitIdxVec<Flags>, var_order: &mut ACIDS ) {
         if !flags[lit].is_set(Flag::IsMarked) {
             flags[lit].set(Flag::IsMarked);
             var_order.bump(lit.var() );
@@ -1831,6 +1891,19 @@ mod tests {
 
         decision = solver.decide();
         assert!(decision.is_none());
+    }
+
+    #[test]
+    fn test_phase_saving(){
+        let mut solver = SOLVER::new(3);
+
+        solver.assign(lit(1), None);
+        solver.undo(lit(1));
+
+        let mut decision = solver.decide();
+        assert!(decision.is_some());
+        assert_eq!(lit(1), decision.unwrap());
+
     }
 
     #[test]
@@ -2324,6 +2397,52 @@ mod tests {
 
         let clause = solver.build_conflict_clause(uip);
         assert_eq!("[Literal(3), Literal(1)]", format!("{:?}", clause));
+    }
+
+    #[test]
+    fn minimize_clause(){
+        let mut solver = SOLVER::new(5);
+
+        solver.add_learned_clause(vec![ lit(2),lit(-3)]);
+        solver.add_learned_clause(vec![ lit(1),lit(-4)]);
+        assert_eq!(2, solver.nb_learned_since_minimiation);
+        solver.clause_minimization();
+        assert_eq!(1 ,solver.watchers[lit(1)].len());
+        assert_eq!(1 ,solver.watchers[lit(-3)].len());
+        assert_eq!(0, solver.nb_learned_since_minimiation);
+
+        solver.add_learned_clause(vec![ lit(1), lit(-4), lit(5)]);
+        solver.add_learned_clause(vec![ lit(3), lit(1),lit(-5)]);
+        assert_eq!(2, solver.nb_learned_since_minimiation);
+        solver.clause_minimization();
+        assert_eq!(0, solver.nb_learned_since_minimiation);
+        assert_eq!("Clause([Literal(2), Literal(-3)])", format!("{:?}", solver.clauses[0]));
+        assert_eq!("Clause([Literal(-4), Literal(1)])", format!("{:?}", solver.clauses[1]));
+        assert_eq!("Clause([Literal(3), Literal(-5), Literal(1)])", format!("{:?}", solver.clauses[2]));
+    }
+
+    #[test]
+    fn subsumption(){
+        let mut solver = SOLVER::new(6);
+
+        solver.add_problem_clause(&mut vec![ 1, 2,-3]);
+        solver.add_problem_clause(&mut vec![ -3, 1]);
+        solver.add_problem_clause(&mut vec![ 3,-5]);
+        solver.add_problem_clause(&mut vec![ 4, 5]);
+        solver.add_problem_clause(&mut vec![ 4, 5,-6]);
+
+        assert_eq!(5, solver.clauses.len());
+        solver.forward_subsumption();
+        assert_eq!("Clause([Literal(4), Literal(5)])",
+                   &format!("{:?}", solver.clauses[0]));
+        assert_eq!("Clause([Literal(1), Literal(-3)])",
+                   &format!("{:?}", solver.clauses[1]));
+        assert_eq!("Clause([Literal(3), Literal(-5)])",
+                   &format!("{:?}", solver.clauses[2]));
+
+        assert_eq!(3, solver.clauses.len());
+        assert_eq!("Clause([Literal(4), Literal(5)])",
+                   &format!("{:?}", solver.clauses[0]));
     }
 
     #[test]
