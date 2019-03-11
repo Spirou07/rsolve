@@ -997,7 +997,6 @@ impl Solver {
             self.activate_clause(clause_id)
         }
         for i in 0..remove_clauses.len(){
-            println!("removing");
             self.remove_clause(remove_clauses[i]);
         }
     }
