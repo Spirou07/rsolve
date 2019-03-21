@@ -203,6 +203,7 @@ impl Solver {
                     }
 
                     if self.should_restart() {
+                        println!("restarting");
                         self.restart();
                     }
 
@@ -352,40 +353,37 @@ impl Solver {
         return cursor;
     }
     /// Used only during the learned clause minimization.
-    fn conflict_analysis(&mut self, conflict: ClauseId, base: ClauseId, new_l: Literal) -> Vec<Literal> {
+    fn conflict_analysis(&mut self, conflict: ClauseId, base_vec: &Vec<Literal>, new_lit: Literal, prop_start: usize) -> Vec<Literal> {
+        let mut marked_lit:Vec<Literal> = Vec::new();
         { // mark all literals in the conflict clause
             let ref mut conflicting = self.clauses[conflict];
+            println!("conflict :");
             for l in conflicting.iter() {
+                println!("{}", format!("{:?}", l));
                 Solver::mark(*l, &mut self.flags);
+                marked_lit.push(*l);
             }
         }
-        let mut marked_lit:Vec<Literal> = Vec::new();
+
         // backwards BFS rooted at the conflict to identify uip (and mark its cause)
-        let mut cursor = self.prop_queue.len();
-        loop {
-            cursor -= 1;
+        let mut cursor = self.prop_queue.len()-1;
+        let mut stop = false;
+        while !stop /*&& prop_start < cursor*/ {
 
-            // Whenever we've analyzed all the literals that are not *forced* by the constraints,
-            // we can stop.
-            if cursor < self.forced { break }
-
-            // Whenever we've found a decision, we have found all literals. Hence, we can stop
             let lit = self.prop_queue[cursor];
-            if self.is_decision(lit) {
-                break;
-            }
+            if cursor == 0 {
+                stop = true;
+            } else { cursor -=1; }
 
-            // otherwise, we just proceed with the rest
             // if a literal is not marked, we don't need to care about it
             if !self.flags[lit].is_set(Flag::IsMarked) { continue }
 
             marked_lit.push(lit);
 
-            // otherwise, we need to mark all the literal in its antecedent. Note, we know lit is no
-            // decision literal because, if it were, the is_uip() would have been true.
+            // otherwise, we need to mark all the literal in its antecedent.
             match self.reason[lit.var()] {
                 // will never happen
-                None => panic!("{:?} is a decision (it has no reason), but is_uip() replied false"),
+                None => {},
                 Some(c_id) => match c_id {
                     // will not happen either
                     CLAUSE_ELIDED => {/* Ignore */},
@@ -394,15 +392,18 @@ impl Solver {
                         let ref mut cause = self.clauses[reason_id];
                         for l in cause.iter().skip(1) {
                             Solver::mark(*l, &mut self.flags);
+                            //println!("marking {}", format!("{:?}", l));
+                            if l.to_isize() == new_lit.to_isize(){
+                                marked_lit.push(*l);
+                            }
                         }
                     }
                 }
             }
         }
-
         return marked_lit.iter()
             .map(|l|*l)
-            .filter(|lit| (*self.clauses[base]).contains(lit) || *lit == new_l)
+            .filter(|lit| ((*base_vec).contains(lit) || lit.to_isize() == new_lit.to_isize()))
             .collect();
     }
 
@@ -512,6 +513,7 @@ impl Solver {
     fn restart(&mut self) {
         let pos = self.root();
         self.rollback(pos);
+        self.clause_minimization();
         self.restart_strat.set_next_limit();
         self.nb_restarts += 1;
         self.nb_conflicts_since_restart = 0;
@@ -800,6 +802,7 @@ impl Solver {
         // Effectively remove the clause
         if self.clauses[clause_id].is_learned {
             self.nb_learned -= 1;
+            self.nb_learned_since_minimiation -= 1;
         }
 
         self.clauses.swap_remove(clause_id);
@@ -846,7 +849,6 @@ impl Solver {
 
         if subsume{
             if self.forward_subsumption_clause(&clause){
-                println!("Clause subsumed");
                 return Ok(CLAUSE_ELIDED);
             }
         }
@@ -862,6 +864,9 @@ impl Solver {
         // if the clause is unit, we shouldn't watch it, it should be enough to just assert it
         if clause.len() == 1 {
             self.is_unsat |= self.assign(clause[0], Some(CLAUSE_ELIDED)).is_err();
+            if self.is_unsat {
+                println!("found unsat {}", format!("{:?}", clause[0]));
+            }
             return if self.is_unsat { Err(())} else { Ok(CLAUSE_ELIDED) };
         }
 
@@ -941,15 +946,716 @@ impl Solver {
     }
 
     fn clause_minimization(&mut self){
-        self.minimize();
+        self.minimizeL();
         self.nb_learned_since_minimiation = 0;
         self.nb_minimization += 1;
     }
+    fn minimizeL(&mut self){
+        let mut remove_clauses = vec![];
+        println!("size {}", self.clauses.len());
+        let start =  self.clauses.len();
+        for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
+            let mut clause = self.clauses[clause_id].as_slice().to_vec();
+            //println!("current clause len {}", format!("{:?}", self.clauses[clause_id].len() ));
+            let mut minimized_c = vec![];
+            let mut minimized_c_neg = vec![];
+            let mut added = false;
+            //self.propagate();
+            let rollback_clause = self.prop_queue.len();
+            self.deactivate_clause(clause_id);
+            for i in 0..clause.len() {
+                let lite = clause[i];
+                //println!("curr lit {}", format!("{:?}", lite));
+                match self.get_value(lite) {
+                    Bool::True  => {
+                        self.rollback(rollback_clause);
+                        self.activate_clause(clause_id);
+                        remove_clauses.push(clause_id);
+                        added = true;
+                        println!("adding with true");
+                        break;
+                    },
+                    Bool::False => {continue;},
+                    Bool::Undef => {//println!("curr lit not assigned");
+                        let rollback_ass = self.prop_queue.len();
+                        self.assign(-lite, None);
+                        let conflict = self.propagate();
+                        if conflict.is_some() {
+                            let vec = self.conflict_analysis(conflict.unwrap(),
+                                                             &minimized_c,
+                                                             lite, rollback_clause);
+                            self.rollback(rollback_clause);
+                            self.add_learned_clause(vec);
+                            remove_clauses.push(clause_id);
+                            added = true;
+                            println!("adding on conflict");
+                            break;
+                        } else{
+                            self.rollback(rollback_ass);
+                            self.assign(lite, None);
+                            let conflict = self.propagate();
+                            if conflict.is_none(){
+                                minimized_c.push(lite);
+                                minimized_c_neg.push(-lite);
+                            }
+                            self.rollback(rollback_ass);
+                        }
+                    },
+                }
+            }
+            self.rollback(rollback_clause);
 
+            if !added {
+                remove_clauses.push(clause_id);
+                if minimized_c.len() != 0 {
+                    let result = self.add_learned_clause(minimized_c);
+                    match result {
+                        Err(()) => {
+                            println!("error add err()");
+                            panic!("add err() on LCM");
+                            return;
+                        },
+                        Ok(c) if c == CLAUSE_ELIDED => {},
+                        Ok(c_id) => {}
+                    }
+                }
+            }
+        }
+        println!("delete len {}", remove_clauses.len());
+        for i in (0..remove_clauses.len()).rev(){
+            self.remove_clause(remove_clauses[i]);
+        }
+        println!("end minimizeL");
+        println!("start mini clauses : {}", start);
+        println!("end mini clauses : {}", self.clauses.len());
+        println!("end unsat : {}", self.is_unsat);
+    }
+/*
+    fn minimizeL(&mut self){
+        let mut remove_clauses = vec![];
+        println!("size {}", self.clauses.len());
+        let start =  self.clauses.len();
+        let mut cnt = 0;
+        let mut cnt_del = 0;
+        for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
+            let mut clause = self.clauses[clause_id].as_slice().to_vec();
+            println!("current clause len {}", format!("{:?}", self.clauses[clause_id].len() ));
+            let mut minimized_c = vec![];
+            let mut minimized_c_neg = vec![];
+            let mut added = false;
+            let rollback_clause = self.prop_queue.len();
+            self.deactivate_clause(clause_id);
+            let mut remove_added = false;
+            let mut inserted_id = 0;
+            let last_lit = 0;
+            for i in 0..clause.len() {
+                let lite = clause[i];
+                //println!("curr lit {}", format!("{:?}", lite));
+                let rollback_lit = self.prop_queue.len();
+                if rollback_clause != rollback_lit{
+                    println!("error ?");
+                    return;
+                }
+                if remove_added{
+                    remove_added = false;
+                    self.remove_clause(inserted_id);
+                    println!("remove added error");
+                    return;
+                    cnt_del +=1;
+                }
+                // Adding C' neg to the clauses
+
+                if minimized_c_neg.len() == 1{
+                    self.assign(minimized_c_neg[0], None);
+                }
+                else if minimized_c_neg.len() != 0 {
+                    let result = self.add_learned_clause(minimized_c_neg.clone());
+                    match result {
+                        Err(()) => {println!("add c' error"); return;},
+                        Ok(c) if c == CLAUSE_ELIDED => {if self.prop_queue.len()- rollback_lit !=1{
+                            println!("error diff {} ",self.prop_queue.len()- rollback_lit );
+                            return;
+                        }},
+                        Ok(c_id) => {
+                            remove_added = true;
+                            inserted_id = c_id;
+                            cnt += 1;
+                        }
+                    }
+                }
+                let res = self.propagate();
+                if res.is_some(){
+                    println!("undesired conflict");
+                    for l in minimized_c_neg.clone(){
+                        println!("in mini c neg : {}", format!("{:?}", l));
+                    }
+                    return;
+                }
+
+                match self.get_value(lite) {
+                    Bool::True  => {
+                        if remove_added{
+                            remove_added = false;
+                            self.rollback(rollback_lit);
+                            self.remove_clause(inserted_id);
+                            cnt_del +=1;
+                        }
+                        self.rollback(rollback_lit);
+                        self.add_learned_clause(clause.clone());
+                        remove_clauses.push(clause_id);
+                        added = true;
+                        println!("adding with true");
+                        break;
+                    },
+                    Bool::False => {
+
+                        if remove_added{
+                            remove_added = false;
+                            self.remove_clause(inserted_id);
+                            self.rollback(rollback_lit);
+                            cnt_del +=1;
+                        }
+                        self.rollback(rollback_lit);
+                        continue;},
+                    Bool::Undef => {//println!("curr lit not assigned");
+
+                        let rollback_ass = self.prop_queue.len();
+                        self.assign(-lite, None);
+                        let conflict = self.propagate();
+                        if conflict.is_some() {
+                            if remove_added{
+                                remove_added = false;
+                                self.rollback(rollback_lit);
+                                self.remove_clause(inserted_id);
+                                cnt_del +=1;
+                            }
+
+                            /*let vec = self.conflict_analysis(conflict.unwrap(),
+                                                             minimized_c.clone(),
+                                                             lite, rollback_clause);*/
+
+                            self.rollback(rollback_lit);
+                            self.add_learned_clause(clause.clone());
+                            remove_clauses.push(clause_id);
+                            added = true;
+                            println!("adding on conflict");
+                            break;
+                        } else{
+                            self.rollback(rollback_ass);
+                            self.assign(lite, None);
+                            let conflict = self.propagate();
+                            if conflict.is_none(){
+                                minimized_c.push(lite);
+                                minimized_c_neg.push(-lite);
+                            } else{
+                                println!("not adding");
+                            }
+                            if remove_added{
+                                remove_added = false;
+                                self.rollback(rollback_lit);
+                                self.remove_clause(inserted_id);
+                                cnt_del +=1;
+                            }
+                        }
+
+                        self.rollback(rollback_lit);
+                        /*
+                        self.add_learned_clause(clause.clone());
+                        remove_clauses.push(clause_id);
+                        */
+                    },
+
+                }
+                if self.is_unsat{ // TODO : REMOVE THIS !!!
+                    println!("inside unsat break");
+                    break;
+                }
+            }
+            self.rollback(rollback_clause);
+
+            if !added {
+                println!("adding minimized : {} ", minimized_c.len());
+                for l in minimized_c.clone(){
+                    if !clause.contains(&l){
+                        println!("error mini c");
+                        return;
+                    }
+                }
+
+                let result = self.add_learned_clause(minimized_c.clone());
+                match result {
+                    Err(()) => {
+                        println!("error add err()");
+                        remove_clauses.push(clause_id);
+                        return;
+                    }
+                    ,
+                    Ok(c) if c == CLAUSE_ELIDED => { println!("error clause elided");
+                        println!("");println!("");println!("");
+                        remove_clauses.push(clause_id);
+                        //return;
+                    },
+                    Ok(c_id) => {
+                        //println!("clause added {}", format!("{:?}", self.clauses[c_id]));
+                        remove_clauses.push(clause_id);
+                        //self.remove_clause(clause_id);
+                    }
+                }
+            }
+            if self.is_unsat{ // TODO : REMOVE THIS !!!
+                println!("outside unsat break");
+                self.is_unsat = false;
+
+                break;
+            }
+        }
+        println!("delete len {}", remove_clauses.len());
+        println!("cnt {}", cnt);
+        println!("cnt del {}", cnt_del);
+        for i in (0..remove_clauses.len()).rev(){
+            self.remove_clause(remove_clauses[i]);
+        }
+        println!("end minimizeL");
+        println!("start mini clauses : {}", start);
+        println!("end mini clauses : {}", self.clauses.len());
+        println!("end unsat : {}", self.is_unsat);
+    }
+    */
+    /*
+    fn minimizeL(&mut self){
+        let mut remove_clauses = vec![];
+        let start =  self.clauses.len();
+        let mut cnt = 0;
+        let mut cnt_del = 0;
+        for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
+            let mut clause = self.clauses[clause_id].as_slice().to_vec();
+
+            //println!("current clause {}", format!("{:?}", self.clauses[clause_id]));
+            println!("current clause len {}", format!("{:?}", self.clauses[clause_id].len() ));
+            let mut minimized_c = vec![];
+            let mut minimized_c_neg = vec![];
+            let mut added = false;
+            let rollback_clause = self.prop_queue.len();
+            self.deactivate_clause(clause_id);
+            let mut remove_added = false;
+            let mut inserted_id = 0;
+            for i in 0..clause.len() {
+                let lite = clause[i];
+                //println!("curr lit {}", format!("{:?}", lite));
+                let rollback_lit = self.prop_queue.len();
+                if rollback_clause != rollback_lit{
+                    println!("error ?");
+                    return;
+                }
+                if remove_added{
+                    remove_added = false;
+                    self.remove_clause(inserted_id);
+                    println!("remove added error");
+                    return;
+                    cnt_del +=1;
+                }
+                // Adding C' neg to the clauses
+                if minimized_c_neg.len() != 0 {
+                    let result = self.add_learned_clause(minimized_c_neg.clone());
+                    match result {
+                        Err(()) => {println!("add c' error"); return;},
+                        Ok(c) if c == CLAUSE_ELIDED => {},
+                        Ok(c_id) => {
+                            remove_added = true;
+                            inserted_id = c_id;
+                            cnt += 1;
+                        }
+                    }
+                }
+                let res = self.propagate();
+                if res.is_some(){
+                    println!("undesired conflict");
+                    return;
+                }
+
+                match self.get_value(lite) {
+                    Bool::True  => {
+                        if remove_added{
+                            remove_added = false;
+                            self.rollback(rollback_lit);
+                            self.remove_clause(inserted_id);
+                            cnt_del +=1;
+                        }
+                        self.rollback(rollback_lit);
+                        self.add_learned_clause(clause.clone());
+                        remove_clauses.push(clause_id);
+                        added = true;
+                        self.rollback(rollback_lit);
+                        break;
+
+                        {
+                        let reason = self.reason[lite.var()];
+                        println!("reason : {} ", format!("{:?}", reason));
+                        if self.reason[lite.var()] == None{
+                            println!("reason None");
+                            return;
+                        }
+                        if reason.unwrap() == CLAUSE_ELIDED{
+                            self.activate_clause(clause_id);
+                            added = true;
+                            break;
+                        }
+                        println!("unwrapping");
+                        let vec = self.conflict_analysis(reason.unwrap(),
+                                                         minimized_c.clone(), lite,
+                                                         rollback_clause);
+                        println!("unsat conflict {}", self.is_unsat);
+                        self.rollback(rollback_clause);/*
+                        if vec.len() == 0{
+                            println!("len 0 !");
+                            break;
+                        }*/
+                        println!("add vec len {}", vec.len());
+
+                        self.add_learned_clause(vec); // change to vec
+                        let conflict = self.propagate();
+                        if conflict.is_some() {
+                            println!("conflict should not appear");
+                            return;
+                        }
+                        added = true;
+                        remove_clauses.push(clause_id);
+                        break;}
+                    },
+                    Bool::Undef => {//println!("curr lit not assigned");
+
+                        let rollback_ass = self.prop_queue.len();
+                        self.assign(-lite, None);
+                        let conflict = self.propagate();
+
+                        if conflict.is_some() {
+                            if remove_added{
+                                remove_added = false;
+                                self.rollback(rollback_lit);
+                                self.remove_clause(inserted_id);
+                                cnt_del +=1;
+                            }
+                            self.rollback(rollback_clause);
+                            self.add_learned_clause(clause.clone());
+                            remove_clauses.push(clause_id);
+                            self.rollback(rollback_lit);
+                            break;
+
+                            {
+                                let vec = self.conflict_analysis(conflict.unwrap(),
+                                                                 minimized_c.clone(),
+                                                                 lite, rollback_clause);
+                                println!("unsat conflict {}", self.is_unsat);
+                                self.rollback(rollback_clause);
+                                if remove_added {
+                                    self.remove_clause(inserted_id);
+                                    cnt_del +=1;
+                                }
+                                if vec.len() == 0 {
+                                    println!("len 0 !");
+                                    break;
+                                }
+                                println!("add vec len {}", vec.len());
+                                // remove 2 below
+                                added = true;
+                                self.activate_clause(clause_id);
+                                break;
+
+                                self.add_learned_clause(clause.clone()); //change to vec
+                                added = true;
+                                remove_clauses.push(clause_id);
+                                break;
+                            }
+                        } else{
+                            self.rollback(rollback_ass);
+                            minimized_c.push(lite);
+                            minimized_c_neg.push(-lite);
+                            if remove_added{
+                                remove_added = false;
+                                self.rollback(rollback_lit);
+                                self.remove_clause(inserted_id);
+                                cnt_del +=1;
+                            }
+                            self.rollback(rollback_lit);
+                        }
+                        {
+                            /*
+                        self.rollback(rollback_ass);
+                        match self.get_value(lite) {
+                            Bool::True  => {
+                                minimized_c.push(lite);
+                                minimized_c_neg.push(-lite);
+                                println!("got true 2");
+                            },
+                            Bool::False => {},
+                            Bool::Undef => {minimized_c.push(lite);
+                                minimized_c_neg.push(-lite);
+                                println!("got undef");
+                            },
+                        }
+                        if remove_added{
+                            self.remove_clause(inserted_id);
+                        }
+                        self.rollback(rollback_clause);
+                        println!("unsat end lit {}", self.is_unsat);
+                        */
+                        }
+                        self.rollback(rollback_lit);
+                    },
+                    Bool::False => {
+                        if remove_added{
+                            remove_added = false;
+                            self.remove_clause(inserted_id);
+                            self.rollback(rollback_lit);
+                            cnt_del +=1;
+                        }
+                        self.rollback(rollback_lit);
+                        continue;},
+                }
+                if self.is_unsat{ // TODO : REMOVE THIS !!!
+                    println!("inside unsat break");
+                    break;
+                }
+            }
+            self.rollback(rollback_clause);
+
+            if !added {
+                println!("adding minimized : {} ", minimized_c.len());
+                /*
+                for l in minimized_c.clone(){
+                    println!("in min : {}", format!("{:?}", l));
+                }*/
+                //let result = self.add_learned_clause(minimized_c.clone());
+                for l in minimized_c{
+                    if !clause.contains(&l){
+                        println!("error mini c");
+                        return;
+                    }
+                }
+
+                let result = self.add_learned_clause(clause.clone());
+                match result {
+                    Err(()) => {
+                        println!("error add err()");
+                        remove_clauses.push(clause_id);
+                        return;
+                    }
+                        ,
+                    Ok(c) if c == CLAUSE_ELIDED => { println!("error clause elided");
+                        remove_clauses.push(clause_id);
+                    return;},
+                    Ok(c_id) => {
+                        //println!("clause added {}", format!("{:?}", self.clauses[c_id]));
+                        remove_clauses.push(clause_id);
+                        //self.remove_clause(clause_id);
+                    }
+                }
+            }
+            if self.is_unsat{ // TODO : REMOVE THIS !!!
+                println!("outside unsat break");
+                break;
+            }
+        }
+        println!("delete len {}", remove_clauses.len());
+        println!("cnt {}", cnt);
+        println!("cnt del {}", cnt_del);
+        for i in (0..remove_clauses.len()).rev(){
+            self.remove_clause(remove_clauses[i]);
+        }
+        println!("end minimizeL");
+        println!("start mini clauses : {}", start);
+        println!("end mini clauses : {}", self.clauses.len());
+        println!("end unsat : {}", self.is_unsat);
+    }*/
+    /*
+    fn minimizeL(&mut self){
+        let mut remove_clauses = vec![];
+
+        for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
+            let mut clause = self.clauses[clause_id].as_slice().to_vec();
+            clause.sort();
+            let mut minimized_c = vec![];
+            let mut added = false;
+            let rollback_clause = self.prop_queue.len();
+            //println!("{}", rollback_clause);
+            self.deactivate_clause(clause_id);
+            println!("clause size : {}", clause.len());
+            for i in 0..clause.len() {
+                //println!("i : {}",i);
+                println!("is unsat : {}", self.is_unsat);
+                let lite = clause[i];
+                println!("curr lit {}", format!("{:?}", lite));
+                match self.get_value(lite) {
+                    Bool::True  => {
+                        minimized_c.push(lite);
+                    },
+                    Bool::False => continue,
+                    Bool::Undef => {//println!("curr lit not assigned");
+                        let rollback_lit = self.prop_queue.len();
+                        /*
+                        for v in minimized_c.clone(){
+                            println!("c : {}", format!("{:?}", v));
+                        }
+        */
+                        self.assign(-lite, None);
+                        let conflict = self.propagate();
+                        if conflict.is_some() {
+                            /*
+                            for i in 0..self.prop_queue.len(){
+                                println!("prop[{}] : {}", i, format!("{:?}", self.prop_queue[i]));
+                            }
+                            for v in minimized_c.clone(){
+                                println!("v {}", format!("{:?}", v));
+                            }
+                            */
+                            let vec = self.conflict_analysis(conflict.unwrap(),
+                                                             minimized_c.clone(), lite);
+                            /*
+                                                println!("new vec");
+                                                for v in vec.clone(){
+                                                    println!("v {}", format!("{:?}", v));
+                                                }
+                            */
+                            println!("{}", self.is_unsat);
+
+                            self.rollback(rollback_clause);
+                            if vec.len() == 0{
+                                println!("len 0 !");
+                                break;
+                            }
+                            self.add_learned_clause(vec);
+                            /*println!("after add");
+                            println!("{}", self.is_unsat);
+                            for i in 0..self.prop_queue.len(){
+                                println!("prop[{}] : {}", i, format!("{:?}", self.prop_queue[i]));
+                            }*/
+                            added = true;
+                            remove_clauses.push(clause_id);
+                            //println!("break");
+                            break;
+                        }
+                    },
+                }
+            }
+            self.rollback(rollback_clause);
+            if !added {
+                //println!("clause {}", format!("{:?}", self.clauses[clause_id]));
+                println!("adding minimized : ");
+                for l in minimized_c.clone(){
+                    println!("in min : {}", format!("{:?}", l));
+                }
+
+                let result = self.add_learned_clause(minimized_c.clone());
+                match result {
+                    Err(()) => remove_clauses.push(clause_id),
+                    Ok(c) if c == CLAUSE_ELIDED => remove_clauses.push(clause_id),
+                    Ok(c_id) => {
+                        println!("clause added {}", format!("{:?}", self.clauses[c_id]));
+                        self.remove_clause(clause_id);
+                    }
+                }
+            }
+        }
+        for i in (0..remove_clauses.len()).rev(){
+            self.remove_clause(remove_clauses[i]);
+        }
+    }*/
+    /*
+    fn minimizeL(&mut self){
+        let mut remove_clauses = vec![];
+
+        for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
+            let clause = self.clauses[clause_id].as_slice().to_vec();
+            let mut minimized_c = vec![];
+            let mut added = false;
+            let rollback_clause = self.prop_queue.len();
+            println!("{}", rollback_clause);
+            self.deactivate_clause(clause_id);
+            for i in 0..clause.len() {
+                let lite = clause[i];
+                match self.get_value(lite) {
+                    Bool::True  => continue,
+                    Bool::False => continue,
+                    Bool::Undef => {},
+                }
+                println!("curr lit {}", format!("{:?}", lite));
+                let rollback_lit = self.prop_queue.len();
+                self.assign(-lite, None);
+                let conflict = self.propagate();
+                if conflict.is_some() {
+                    /*
+                    for i in 0..self.prop_queue.len(){
+                        println!("prop[{}] : {}", i, format!("{:?}", self.prop_queue[i]));
+                    }
+                    for v in minimized_c.clone(){
+                        println!("v {}", format!("{:?}", v));
+                    }
+                    */
+                    let vec = self.conflict_analysis(conflict.unwrap(),
+                                                     minimized_c.clone(), lite);
+
+                    println!("new vec");
+                    for v in vec.clone(){
+                        println!("v {}", format!("{:?}", v));
+                    }
+                    /*
+                    println!("{}", self.is_unsat);
+                    */
+                    self.rollback(rollback_clause);
+                    if vec.len() == 0{
+                        println!("len 0 !");
+                        break;
+                    }
+                    self.add_learned_clause(vec);
+                    /*println!("after add");
+                    println!("{}", self.is_unsat);
+                    for i in 0..self.prop_queue.len(){
+                        println!("prop[{}] : {}", i, format!("{:?}", self.prop_queue[i]));
+                    }*/
+                    added = true;
+                    remove_clauses.push(clause_id);
+                    break;
+                }
+                self.rollback(rollback_lit);
+                let res = self.assign(lite, None);
+                let conflict = self.propagate();
+                if conflict.is_none() {
+                    //println!("no conflict pushin {}", format!("{:?}", !lit));
+                    minimized_c.push(lite);
+                    self.rollback(rollback_lit);
+                    self.assign(-lite, None);
+                    continue;
+                }
+                self.rollback(rollback_lit);
+                self.assign(-lite, None);
+            }
+            self.rollback(rollback_clause);
+            if !added {
+                println!("clause {}", format!("{:?}", self.clauses[clause_id]));
+                let result = self.add_learned_clause(minimized_c.clone());
+                match result {
+                    Err(()) => remove_clauses.push(clause_id),
+                    Ok(c) if c == CLAUSE_ELIDED => remove_clauses.push(clause_id),
+                    Ok(c_id) => {
+                        println!("clause added {}", format!("{:?}", self.clauses[c_id]));
+                        self.remove_clause(clause_id);
+                    }
+                }
+            }
+        }
+        for i in (0..remove_clauses.len()).rev(){
+            self.remove_clause(remove_clauses[i]);
+        }
+    }
+*/
+    /*
     fn minimize(&mut self){
         let mut remove_clauses = vec![];
-        for clause_id in self.clauses.len()-(self.nb_learned-self.nb_learned_since_minimiation)..self.clauses.len(){
-
+        println!("{}", self.nb_learned_since_minimiation);
+        println!("{}", self.clauses.len());
+        let start_len = self.clauses.len();
+        for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
+            assert_eq!(false, self.clauses.len() < start_len);
             //if !liveClause(clause_id) continue;
             let clause = self.clauses[clause_id].as_slice().to_vec();
             let len = clause.len();
@@ -958,48 +1664,69 @@ impl Solver {
             self.deactivate_clause(clause_id);
             for i in 0..len {
                 let lit = clause[i];
+                println!("current lit {}", format!("{:?}",lit));
                 let mut new_cid = self.clauses.len()+2;
-                if neg_new_literals.len() != 0 {
+                let mut added = false;
+                let start_prop = self.prop_queue.len();
+                if neg_new_literals.len() == 1 {
+                    println!("len of 1");
+                    let conflict = self.propagate_literal(!lit);
+                    self.prop_queue.push(!lit);
+                    // no conflict on last iter so ok
+                }
+                else if neg_new_literals.len() != 0 {
                     match self.add_learned_clause(neg_new_literals.as_slice().to_vec()) {
                         Err(()) => (),
                         Ok(c) if c == CLAUSE_ELIDED => (),
                         Ok(c_id) => {
                             new_cid = c_id;
+                            added = true;
+                            self.nb_learned -= 1;
+                            self.nb_learned_since_minimiation -1;
+                            println!("new cid {}", new_cid);
                         }
                     }
                 }
 
                 let rollback = self.prop_queue.len();
+                println!("prop {}", rollback);
                 let conflict = self.propagate_literal(lit);
+                println!("prop after {}", self.prop_queue.len());
                 if conflict.is_some(){
                     let vec = self.conflict_analysis(conflict.unwrap(),
-                                                     clause_id, -lit);
+                                                     neg_new_literals, -lit, start_prop);
+                    println!("prop conflict {}", self.prop_queue.len());
                     self.rollback(rollback);
-                    if new_cid < self.clauses.len() {
+                    if added {
                         self.remove_clause(new_cid);
                     }
                     self.add_learned_clause(vec);
                     remove_clauses.push(clause_id);
+                    println!("remove {}", format!("{:?}", self.clauses[clause_id]));
                     conf = true;
+                    return;
                     break;
                 }
 
                 self.rollback(rollback);
+                println!("prop after rollback {}", self.prop_queue.len());
                 let conflict = self.propagate_literal(-lit);
                 if conflict.is_none(){
+                    println!("no conflict pushin {}", format!("{:?}", !lit));
                     neg_new_literals.push(-lit);
                 }
                 self.rollback(rollback);
-                if new_cid < self.clauses.len() {
+                if added {
                     self.remove_clause(new_cid);
                 }
             }
             self.activate_clause(clause_id)
         }
-        for i in 0..remove_clauses.len(){
+
+        for i in (0..remove_clauses.len()).rev(){
             self.remove_clause(remove_clauses[i]);
         }
-    }
+    }*/
 
     // -------------------------------------------------------------------------------------------//
     // ---------------------------- WATCHED LITERALS ---------------------------------------------//
@@ -1283,9 +2010,6 @@ impl Solver {
 
     pub fn forward_subsumption(&mut self){
         for id in (0..self.clauses.len()).rev() {
-            if id % 1000 == 0{
-                println!("{}", id);
-            }
             let mut del = false;
             for id2 in (0..self.clauses.len()).rev(){
                 if id != id2{
@@ -2401,23 +3125,28 @@ mod tests {
     #[test]
     fn minimize_clause(){
         let mut solver = SOLVER::new(5);
-
+        solver.add_problem_clause(&mut vec![5,2]);
+        solver.add_learned_clause(vec![ lit(2),lit(-3), lit(4)]);
         solver.add_learned_clause(vec![ lit(2),lit(-3)]);
-        solver.add_learned_clause(vec![ lit(1),lit(-4)]);
+
         assert_eq!(2, solver.nb_learned_since_minimiation);
         solver.clause_minimization();
-        assert_eq!(1 ,solver.watchers[lit(1)].len());
-        assert_eq!(1 ,solver.watchers[lit(-3)].len());
+
+        assert_eq!(0 ,solver.watchers[lit(1)].len());
         assert_eq!(0, solver.nb_learned_since_minimiation);
 
         solver.add_learned_clause(vec![ lit(1), lit(-4), lit(5)]);
+        solver.add_learned_clause(vec![ lit(1), lit(5)]);
         solver.add_learned_clause(vec![ lit(3), lit(1),lit(-5)]);
-        assert_eq!(2, solver.nb_learned_since_minimiation);
+        solver.add_learned_clause(vec![ lit(3), lit(1)]);
+        assert_eq!(4, solver.nb_learned_since_minimiation);
         solver.clause_minimization();
         assert_eq!(0, solver.nb_learned_since_minimiation);
-        assert_eq!("Clause([Literal(2), Literal(-3)])", format!("{:?}", solver.clauses[0]));
-        assert_eq!("Clause([Literal(-4), Literal(1)])", format!("{:?}", solver.clauses[1]));
-        assert_eq!("Clause([Literal(3), Literal(-5), Literal(1)])", format!("{:?}", solver.clauses[2]));
+        for i in 0..solver.clauses.len(){
+            println!("{}", format!("{:?}", solver.clauses[i]))
+        }
+        //assert_eq!(false, solver.is_unsat);
+        //assert_eq!(true, false)
     }
 
     #[test]
