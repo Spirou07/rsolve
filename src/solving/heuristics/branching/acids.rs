@@ -34,7 +34,6 @@ impl BranchingHeuristic for ACIDS {
     fn bump(&mut self, var: Variable) {
         self.heap.score[var] /= 2.0;
         self.heap.score[var] += self.conflict_index as f64 /2.0;
-        println!("{}", self.heap.score[var]);
 
         if self.heap.position[var] <= self.heap.size { self.heap.swim(var); }
     }

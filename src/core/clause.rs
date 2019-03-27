@@ -1,6 +1,10 @@
+extern crate time;
+
 use std::ops::*;
 use std::fmt;
+//use std::mem;
 use super::*;
+//use self::time::*;
 
 // -----------------------------------------------------------------------------------------------
 /// # Clause
@@ -110,6 +114,7 @@ mod tests {
             Literal::from(4),
             Literal::from(8)], false);
 
+
         assert_eq!("1 2 4 8 0", &clause.to_dimacs());
     }
 
@@ -147,7 +152,27 @@ mod tests {
         assert_eq!("Clause([Literal(1), Literal(4), Literal(2), Literal(8)])",
                    &format!("{:?}", clause));
     }
+    /*
+    #[test]
+    fn test_time(){
+        let start = PreciseTime::now();
+        let mut clauses = Vec::with_capacity(150);
+        for i in 0..150 {
+            let mut clause = Clause::new(vec![
+                Literal::from(1),
+                Literal::from(2),
+                Literal::from(4),
+                Literal::from(8)], false);
+            clauses.insert(i,clause)
+        }
 
+        let end = PreciseTime::now();
+        println!("{} seconds for whatever you did.", start.to(end));
+        assert_eq!(end.to(PreciseTime::now()),start.to(end))
+    }*/
+
+    //left: `Duration { secs: 0, nanos: 14010 }`,
+    // right: `Duration { secs: 0, nanos: 316561 }
     #[test]
     fn remove_literals() {
         let mut clause = Clause::new(vec![

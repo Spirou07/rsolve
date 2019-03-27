@@ -1,8 +1,12 @@
 extern crate fixedbitset;
+extern crate time;
 use core::*;
+/*
 use std::ops::{BitAnd, BitOr};
-use self::fixedbitset::FixedBitSet;
 
+use self::fixedbitset::FixedBitSet;
+use self::time::*;
+*/
 
 fn is_tautology(c: &Clause) -> bool{
     for lit in c.iter(){
@@ -11,7 +15,7 @@ fn is_tautology(c: &Clause) -> bool{
     return false;
 }
 pub fn subsume(c1: &Clause, c2: &Clause) -> bool {
-    if c1.len() > c2.len() {return false; }
+    if c1.len() >= c2.len() {return false; }
     for lit in c1.iter(){
         if !c2.contains(lit){
             return false
@@ -19,6 +23,29 @@ pub fn subsume(c1: &Clause, c2: &Clause) -> bool {
     }
     return true;
 }
+/*
+pub fn subsume2(c1: &Clause, c2: &Clause) -> bool {
+    let mut idx1 = 0;
+    let mut idx2 = 0;
+    let mut cnt = c2.len() - c1.len();
+    let tab1 = c1.clone().sort();
+    let tab2 = c2.clone().sort();
+
+    while cnt >= 0 && idx1 < c1.len() {
+        if (tab1.idx1 < tab2.idx2){
+            return false;
+        }
+        else if tab1.idx1 > tab2.idx2 {
+            cnt -= 1;
+            idx2 += 1;
+        }
+        else {
+            idx1 +=1;
+            idx2 +=1;
+        }
+    }
+    return cnt >= 0
+}*/
 
 pub fn subsume_without_lit(c1: &Clause, c2: &Clause, l: Literal) -> bool {
     if c1.len() > c2.len()+1 {return false; }
@@ -48,6 +75,13 @@ pub fn self_subsuming_resolution_forward(c1: &mut Clause, c2: &mut Clause) {
     }
 }
 /*
+fn subsume2(c1: &Clause2, c2: &Clause2) -> bool {
+    if c1.len() > c2.len() {return false; }
+    return ((*c1).positive.bitand(&(*c2).positive) == (*c1).positive) &&
+        ((*c1).negative.bitand(&(*c2).negative) == (*c1).negative);
+}
+
+
 fn is_tautology(c: &Clause) -> bool{
     for lit in c.iter(){
         if lit.to_isize() > 0 && c.negative.contains(lit.to_isize() as usize){ return true; }
@@ -56,11 +90,7 @@ fn is_tautology(c: &Clause) -> bool{
     return false;
 }
 
-fn subsume(c1: &Clause, c2: &Clause) -> bool {
-    if c1.len() > c2.len() {return false; }
-    return ((*c1).positive.bitand(&(*c2).positive) == (*c1).positive) &&
-        ((*c1).negative.bitand(&(*c2).negative) == (*c1).negative);
-}
+
 
 // Lit must be in c1 and -Lit in c2 !!!
 pub fn subsume_without_lit(c1: &Clause, c2: &Clause, l: Literal) -> bool {
@@ -107,22 +137,27 @@ fn self_subsuming_resolution_forward(c1: &mut Clause, c2: &mut Clause) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /*
     #[test]
     fn clause_subsumes_itself() {
-        let clause1 = Clause::new(vec![
-            Literal::from(1),
-            Literal::from(2),
-            Literal::from(4),
-            Literal::from(8)], false);
+        let mut terms = vec![];
+        for i in 0..300 {
+            terms.insert(i,Literal::from(i as i32 +1));
+        }
+        let start_clause = PreciseTime::now();
+        let clause1 = Clause::new(terms.clone(), false);
 
-        let clause2 = Clause::new(vec![
-            Literal::from(2),
-            Literal::from(4),
-            Literal::from(1),
-            Literal::from(8)], false);
+        let clause2 = Clause::new(terms.clone(), false);
+        let end_clause1 = PreciseTime::now();
+        let clause21 = Clause::new(terms.clone(), false);
+
+        let clause22 = Clause::new(terms.clone(), false);
+        let end_clause = PreciseTime::now();
+        //assert_eq!(start_clause.to(end_clause1), end_clause1.to(end_clause));
+        let start = PreciseTime::now();
         assert_eq!(subsume(&clause1,&clause2), true);
-        assert_eq!(subsume(&clause1,&clause1), true)
-    }
+        assert_eq!(subsume(&clause2,&clause1), true);
+    }*/
     #[test]
     fn clause_does_not_subsumes() {
         let clause1 = Clause::new(vec![

@@ -2,7 +2,6 @@ extern crate rand;
 
 use solving::heuristics::BranchingHeuristic;
 use core::*;
-use collections::VarHeap;
 use self::rand::Rng;
 
 
@@ -29,7 +28,7 @@ impl BranchingHeuristic for Random {
     }
 
     #[inline]
-    fn bump(&mut self, var: Variable) {
+    fn bump(&mut self, _var: Variable) {
 
     }
 
