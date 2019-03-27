@@ -60,9 +60,9 @@ pub struct Solver {
     max_learned  : usize,
 
     /// Glucose specific
-    restart_strat: Glucose, // HERE
+    //restart_strat: Glucose, // HERE
     //restart_strat: Luby,
-    //restart_strat: InOut,
+    restart_strat: InOut,
 
     glucose_wind : Vec<u32>,
 
@@ -139,9 +139,10 @@ impl Solver {
             var_order: ACIDS::new(nb_vars),
             phase_saving: FixedBitSet::with_capacity(1 + nb_vars),
             max_learned: 1000,
-            restart_strat: Glucose::new(),
+            // HERE
+            //restart_strat: Glucose::new(),
             //restart_strat: Luby::new(100),
-            //restart_strat: InOut::new(),
+            restart_strat: InOut::new(),
 
             glucose_size: 100, // change also next line !
             glucose_wind: Vec::with_capacity(100), // correspond to glucose_size
@@ -505,9 +506,9 @@ impl Solver {
     /// Asks the restart strategy and tells if a complete restart of the search should be triggered
     #[inline]
     fn should_restart(&self) -> bool { // HERE
-        self.restart_strat.should_restart(self.glucose_avg_global, &self.glucose_wind) // GLUCOSE
+        //self.restart_strat.should_restart(self.glucose_avg_global, &self.glucose_wind) // GLUCOSE
         //self.restart_strat.should_restart(self.nb_conflicts, &self.glucose_wind) // Luby
-        //self.restart_strat.should_restart(self.nb_conflicts_since_restart, &self.glucose_wind) // InOut
+        self.restart_strat.should_restart(self.nb_conflicts_since_restart, &self.glucose_wind) // InOut
     }
 
     /// Restarts the search to find a better path towards the solution.
@@ -1027,6 +1028,9 @@ impl Solver {
                         Ok(c) if c == CLAUSE_ELIDED => {},
                         Ok(_c_id) => {}
                     }
+                } else {
+                    self.is_unsat = true;
+                    return;
                 }
             }
         }
