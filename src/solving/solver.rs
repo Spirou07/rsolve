@@ -60,7 +60,9 @@ pub struct Solver {
     max_learned  : usize,
 
     /// Glucose specific
-    restart_strat: Glucose,
+    restart_strat: Glucose, // HERE
+    //restart_strat: Luby,
+    //restart_strat: InOut,
 
     glucose_wind : Vec<u32>,
 
@@ -138,6 +140,8 @@ impl Solver {
             phase_saving: FixedBitSet::with_capacity(1 + nb_vars),
             max_learned: 1000,
             restart_strat: Glucose::new(),
+            //restart_strat: Luby::new(100),
+            //restart_strat: InOut::new(),
 
             glucose_size: 100, // change also next line !
             glucose_wind: Vec::with_capacity(100), // correspond to glucose_size
@@ -203,7 +207,6 @@ impl Solver {
                     }
 
                     if self.should_restart() {
-                        println!("restarting");
                         self.restart();
                     }
 
@@ -390,7 +393,6 @@ impl Solver {
                         let ref mut cause = self.clauses[reason_id];
                         for l in cause.iter().skip(1) {
                             Solver::mark(*l, &mut self.flags);
-                            //println!("marking {}", format!("{:?}", l));
                             if l.to_isize() == new_lit.to_isize(){
                                 marked_lit.push(*l);
                             }
@@ -502,8 +504,10 @@ impl Solver {
 
     /// Asks the restart strategy and tells if a complete restart of the search should be triggered
     #[inline]
-    fn should_restart(&self) -> bool {
-        self.restart_strat.should_restart(self.glucose_avg_global, &self.glucose_wind)
+    fn should_restart(&self) -> bool { // HERE
+        self.restart_strat.should_restart(self.glucose_avg_global, &self.glucose_wind) // GLUCOSE
+        //self.restart_strat.should_restart(self.nb_conflicts, &self.glucose_wind) // Luby
+        //self.restart_strat.should_restart(self.nb_conflicts_since_restart, &self.glucose_wind) // InOut
     }
 
     /// Restarts the search to find a better path towards the solution.
@@ -1428,7 +1432,7 @@ impl Solver {
     /// mutably/immutably. This function solves the problem by explicily mentioning which parts of
     /// the state are required to be muted.
     #[inline]
-    fn mark_and_bump(lit : Literal, flags: &mut LitIdxVec<Flags>, var_order: &mut ACIDS ) {
+    fn mark_and_bump(lit : Literal, flags: &mut LitIdxVec<Flags>, var_order: &mut ACIDS ) { // HERE
         if !flags[lit].is_set(Flag::IsMarked) {
             flags[lit].set(Flag::IsMarked);
             var_order.bump(lit.var() );
@@ -2445,10 +2449,7 @@ mod tests {
         assert_eq!(4, solver.nb_learned_since_minimiation);
         solver.clause_minimization();
         assert_eq!(0, solver.nb_learned_since_minimiation);
-        for i in 0..solver.clauses.len(){
-            println!("{}", format!("{:?}", solver.clauses[i]))
-        }
-        //assert_eq!(false, solver.is_unsat);
+        assert_eq!(false, solver.is_unsat);
         //assert_eq!(true, false)
     }
 

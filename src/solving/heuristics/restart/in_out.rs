@@ -15,7 +15,7 @@ impl RestartHeuristic2 for InOut {
     /// Tells whether the solver should restart given it has already encountered `nb_conflicts`
     #[inline]
     fn should_restart(&self, nb_conflict: usize, _queue: &Vec<u32>) -> bool {
-        nb_conflict == self.conflicts
+        return nb_conflict == self.conflicts;
     }
 
     /// Sets the next conflict limit before the next restart
@@ -40,7 +40,6 @@ impl InOut {
         if self.inner >= self.outer {
             self.inner = 100;
             self.outer = (self.outer * 11)/10 as usize;
-            self.conflicts = 0;
         } else {
             self.inner = (self.inner * 11)/10 as usize;
         }
@@ -56,6 +55,40 @@ impl InOut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_out_restart() {
+        let mut tested = InOut::new();
+        assert_eq!(tested.should_restart(50, &vec![]), false);
+        assert_eq!(tested.should_restart(99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), true);
+        assert_eq!(tested.should_restart(101, &vec![]), false);
+
+        tested.set_next_limit();
+
+        assert_eq!(tested.should_restart(50, &vec![]), false);
+        assert_eq!(tested.should_restart(99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), true);
+        assert_eq!(tested.should_restart(101, &vec![]), false);
+
+        tested.set_next_limit();
+
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(109, &vec![]), false);
+        assert_eq!(tested.should_restart(110, &vec![]), true);
+        assert_eq!(tested.should_restart(111, &vec![]), false);
+
+        tested.set_next_limit();
+        tested.set_next_limit();
+        tested.set_next_limit();
+
+        assert_eq!(tested.should_restart(110, &vec![]), false);
+        assert_eq!(tested.should_restart(120, &vec![]), false);
+        assert_eq!(tested.should_restart(121, &vec![]), true);
+        assert_eq!(tested.should_restart(122, &vec![]), false);
+
+    }
+
 
     #[test]
     fn in_out_sequence() {

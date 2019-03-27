@@ -27,15 +27,13 @@ impl BranchingHeuristic for Random {
         return ret;
     }
 
-    #[inline]
-    fn bump(&mut self, _var: Variable) {
+    #[allow(unused_variables)]
+    /// (Optional) Updates the variable's score according to the implemented heuristic
+    fn bump(&mut self, var: Variable) {}
 
-    }
+    /// (Optional) Ages the score of all the variables to make them appear less relevant
+    fn decay(&mut self) {}
 
-    #[inline]
-    fn decay(&mut self) {
-
-    }
     /// return true iff there is no element left in the heap
     #[inline]
     fn is_empty(&self) -> bool { self.available.is_empty() }

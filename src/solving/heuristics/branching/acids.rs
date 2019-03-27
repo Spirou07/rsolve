@@ -3,8 +3,7 @@ use collections::*;
 use solving::heuristics::BranchingHeuristic;
 
 // -----------------------------------------------------------------------------------------------
-/// The ubiquitous Variable State Independent Decaying Sum (VSIDS) heuristic for selecting
-/// decision variables.
+/// The Average Conflict-Index Decision Score (ACIDS) heuristic for selecting decision variables.
 // -----------------------------------------------------------------------------------------------
 #[derive(Debug)]
 pub struct ACIDS {
@@ -26,7 +25,7 @@ impl BranchingHeuristic for ACIDS {
         }
     }
 
-    /// updates the variable's score using microsat scoring scheme
+    /// updates the variable's score 
     ///
     /// # Panics
     /// - if the given variable does not fit in the range [1 .. capa]

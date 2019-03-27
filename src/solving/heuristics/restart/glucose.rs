@@ -17,11 +17,8 @@ impl RestartHeuristic for Glucose {
     }
 
     /// Sets the next conflict limit before the next restart
-    /// cannot but a limit
     #[inline]
-    fn set_next_limit(&mut self) {
-
-    }
+    fn set_next_limit(&mut self) {}
 }
 impl Glucose {
     /// Creates a new instance
