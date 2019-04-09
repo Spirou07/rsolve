@@ -1070,7 +1070,7 @@ impl Solver {
             let mut added = false;
             let conflict = self.propagate();
             if conflict.is_some(){
-                panic!("conflict on LCM");
+                panic!("conflict on LCM 1");
             }
             let rollback_clause = self.prop_queue.len();
             self.deactivate_clause(clause_id);
@@ -1080,16 +1080,18 @@ impl Solver {
                 let lite = clause[i];
                 let conflict = self.propagate();
                 if conflict.is_some(){
-                    panic!("conflict on LCM");
+                    panic!("conflict on LCM 2");
                 }
                 match self.get_value(lite) {
                     Bool::True  => {
                         // Learned clause is a TAUTOLOGY
+                        minimized_c.push(lite);
+                        break;
+                        /*
                         self.rollback(rollback_clause);
                         self.activate_clause(clause_id);
                         added = true;
-                        remove_clauses.push(clause_id);
-                        break;
+                        remove_clauses.push(clause_id);*/
 
 /*
                         let reason = self.reason[lite.var()];
@@ -1129,20 +1131,18 @@ impl Solver {
                         self.assign(-lite, None).ok();
 
                         let conflict = self.propagate();
-/*
-                        self.rollback(rollback_clause);
-                        self.activate_clause(clause_id);
-                        added = true;
-                        break;
-*/
                         if conflict.is_some() {
                             let vec = self.conflict_analysis(conflict.unwrap(),
                                                              &minimized_c,
                                                              lite, rollback_clause);
                             self.rollback(rollback_clause);
-
+                            let remove = vec.len() >= 2;
                             self.add_learned_clause(vec).ok();
-                            remove_clauses.push(clause_id);
+                            if remove {
+                                self.remove_clause(clause_id);
+                            } else {
+                                remove_clauses.push(clause_id);
+                            }
                             added = true;
                             break;
                         } else{
@@ -1161,30 +1161,20 @@ impl Solver {
             }
 
             // DO NOT ADD ROLLBACK HERE
-            
-            if !added {
-                self.rollback(rollback_clause);
-                self.activate_clause(clause_id);
-                added = true;
-            }
 
             if !added {
-                remove_clauses.push(clause_id);
+                self.rollback(rollback_clause);
                 if minimized_c.len() != 0 {
-                    for l in minimized_c.clone() {
-                        if !clause.contains(&l){
-                            panic!("error mini_c");
-                        }
-                    }
                     let result = self.add_learned_clause(minimized_c);
 
                     match result {
                         Err(()) => {
                             panic!("error add learned");
                         },
-                        Ok(c) if c == CLAUSE_ELIDED => {},
-                        Ok(_c_id) => {}
+                        Ok(c) if c == CLAUSE_ELIDED => {remove_clauses.push(clause_id);},
+                        Ok(_c_id) => {self.remove_clause(clause_id);}
                     }
+
                 } else {
                     self.is_unsat = true;
                     return;
@@ -1192,6 +1182,7 @@ impl Solver {
             }
         }
         for i in (0..remove_clauses.len()).rev(){
+            //panic!("not all removed");
             self.remove_clause(remove_clauses[i]);
         }
     }
