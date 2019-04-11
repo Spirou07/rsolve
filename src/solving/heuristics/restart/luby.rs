@@ -61,6 +61,18 @@ impl Luby {
 mod tests {
     use super::*;
 
+    /*
+    #[test]
+    fn test_luby() {
+        let mut tested = Luby::new(100);
+
+        for i in 1..34{
+            println!("luby {} : {}", i, 100 << tested.luby())
+        }
+        assert_eq!(true,false);
+    }*/
+
+
     #[test]
     fn luby_generates_luby_sequence() {
         let mut tested = Luby::new(100);
@@ -81,6 +93,7 @@ mod tests {
         assert_eq!(tested.luby(), 4);
         assert_eq!(tested.luby(), 8);
     }
+
     /*
     #[test]
     fn should_restart_follows_luby_sequence(){
