@@ -9,8 +9,9 @@ argparse    = "0.2.1"  # python-like command line arg parsing
 flate2      = "0.2.20" # gzip
 bzip2       = "0.3.2"  # bz2
 xz2         = "0.1.3"  # Lzma
-
+rand        = "0.6.0"
 fixedbitset = "0.1.8"  # compact bit set
+time        = "0.1.40"
 
 [profile.release]
 opt-level = 3

@@ -1,6 +1,10 @@
+extern crate time;
+
 use std::ops::*;
 use std::fmt;
+//use std::mem;
 use super::*;
+//use self::time::*;
 
 // -----------------------------------------------------------------------------------------------
 /// # Clause
@@ -15,7 +19,8 @@ pub struct Clause {
     literals: Vec<Literal>,
     /// A flag indicating whether or not this clause originates from the problem definition or if
     /// it was learned during search
-    pub is_learned: bool
+    pub is_learned: bool,
+    is_active: bool
 }
 
 impl Clause {
@@ -23,7 +28,8 @@ impl Clause {
     pub fn new(terms: Vec<Literal>, is_learned: bool) -> Clause {
         let mut clause = Clause{
             literals: terms,
-            is_learned
+            is_learned,
+            is_active: true,
         };
 
         clause.literals.shrink_to_fit();
@@ -40,6 +46,46 @@ impl Clause {
         out.push_str("0");
         return out;
     }
+
+    pub fn remove_lit(&mut self, l: Literal){
+        let pos = self.iter().position(|x| *x == l).unwrap();
+        (*self).remove(pos);
+        /*
+        return;
+
+        let mut idx = 0;
+        let mut found = false;
+        for lit in (*self).iter(){
+            if *lit == l{
+                found = true;
+                break
+            }
+            idx+=1;
+        }
+        if found{
+            (*self).swap_remove(idx);
+        }*/
+    }
+
+    pub fn contains_lit(&self, l: Literal) -> bool{
+        for lit in (*self).iter(){
+            if *lit == l{
+                return true;
+            }
+        }
+        return false
+    }
+
+    pub fn deactivate(&mut self){
+        self.is_active = false;
+    }
+    pub fn activate(&mut self){
+        self.is_active = true;
+    }
+    pub fn is_active(&self) -> bool{
+        return self.is_active;
+    }
+
 }
 
 impl Deref for Clause {
@@ -80,6 +126,7 @@ mod tests {
             Literal::from(4),
             Literal::from(8)], false);
 
+
         assert_eq!("1 2 4 8 0", &clause.to_dimacs());
     }
 
@@ -117,4 +164,25 @@ mod tests {
         assert_eq!("Clause([Literal(1), Literal(4), Literal(2), Literal(8)])",
                    &format!("{:?}", clause));
     }
+    /*
+    #[test]
+    fn test_time(){
+        let start = PreciseTime::now();
+        let mut clauses = Vec::with_capacity(150);
+        for i in 0..150 {
+            let mut clause = Clause::new(vec![
+                Literal::from(1),
+                Literal::from(2),
+                Literal::from(4),
+                Literal::from(8)], false);
+            clauses.insert(i,clause)
+        }
+
+        let end = PreciseTime::now();
+        println!("{} seconds for whatever you did.", start.to(end));
+        assert_eq!(end.to(PreciseTime::now()),start.to(end))
+    }*/
+
+    //left: `Duration { secs: 0, nanos: 14010 }`,
+    // right: `Duration { secs: 0, nanos: 316561 }
 }

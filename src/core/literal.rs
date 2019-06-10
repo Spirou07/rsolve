@@ -1,4 +1,5 @@
 use std::ops::*;
+use std::cmp::*;
 use super::*;
 
 // -----------------------------------------------------------------------------------------------
@@ -73,6 +74,17 @@ impl Not for Literal {
     type Output = Literal;
     fn not(self) -> Literal {
         Literal(-self.0)
+    }
+}
+
+impl Ord for Literal{
+    fn cmp(&self, other: &Literal) -> Ordering {
+        self.to_isize().cmp(&other.to_isize())
+    }
+}
+impl PartialOrd for Literal {
+    fn partial_cmp(&self, other: &Literal) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

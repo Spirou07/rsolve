@@ -33,7 +33,15 @@ pub trait BranchingHeuristic {
 /// Abstraction of a restart strategy.
 pub trait RestartHeuristic {
     /// Tells whether the solver should restart given it has already encountered `nb_conflicts`
-    fn should_restart(&self, nb_conflict: usize) -> bool;
+    fn should_restart(&self, mean: f64, queue: &Vec<u32>) -> bool;
+
+    /// Sets the next conflict limit before the next restart
+    fn set_next_limit(&mut self);
+}
+
+pub trait RestartHeuristic2 {
+    /// Tells whether the solver should restart given it has already encountered `nb_conflicts`
+    fn should_restart(&self, mean: usize, queue: &Vec<u32>) -> bool;
 
     /// Sets the next conflict limit before the next restart
     fn set_next_limit(&mut self);

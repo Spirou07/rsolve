@@ -49,6 +49,33 @@ impl VarHeap {
         return ret;
     }
 
+    pub fn new_zero(capa: usize) -> VarHeap {
+        let mut ret = VarHeap {
+            capa    : capa,
+            size    : capa,
+            heap    : Vec::with_capacity(1+capa),
+            score   : VarIdxVec::with_capacity(capa),
+            position: VarIdxVec::with_capacity(capa)
+        };
+
+        // fill padding with a non-existing variable
+        ret.heap.push(Variable::from(capa+1));
+
+        // initialize the heap with actual values !
+        for i in 1..(capa+1) {
+            ret.heap.push(Variable::from(i));
+            ret.position.push(i);
+            ret.score.push(0.0);
+        }
+
+        // reclaim wastefully overallocated memory
+        ret.heap    .shrink_to_fit();
+        ret.position.shrink_to_fit();
+        ret.score   .shrink_to_fit();
+
+        return ret;
+    }
+
     /// return true iff there is no element left in the heap
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -67,7 +94,7 @@ impl VarHeap {
     pub fn push_back(&mut self, var: Variable) {
         let var_pos = self.position[var];
 
-        // Do it iff it is not already present
+        // Do it iff it is not already present TODO : ?
         if var_pos > self.size {
             let other_pos = self.size +1;
             let other_var = self.heap[other_pos as usize];
@@ -95,12 +122,13 @@ impl VarHeap {
         debug_assert!( !self.is_empty(), "Cannot pop from an empty heap");
 
         let var = self.heap[1];
-
+        // Swap the 2 values in the heap and position arrays
         self.heap[1] = self.heap[self.size as usize];
         self.heap[self.size as usize] = var;
 
         self.position[ self.heap[1] ] = 1;
         self.position[ var ] = self.size;
+        // Popped var is no longer in the heap
         self.size -= 1;
 
         let new_head = self.heap[1];

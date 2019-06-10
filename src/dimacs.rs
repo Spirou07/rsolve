@@ -4,6 +4,10 @@ use std::io::*;
 use core::*;
 use solving::*;
 
+extern crate time;
+
+//use self::time::PreciseTime;
+
 pub fn parse_header<Source>(input : &mut Lines<Source>) -> Solver
     where Source : io::BufRead {
 
@@ -31,7 +35,6 @@ pub fn load_clauses<Source>(solver: &mut Solver, input: &mut Lines<Source>)
     for line in input {
         let line = line.unwrap();
         let line = line.trim();
-
         // it's a comment, skip it
         if line.starts_with("c ") { continue; }
 
