@@ -20,6 +20,7 @@ pub struct Clause {
     /// A flag indicating whether or not this clause originates from the problem definition or if
     /// it was learned during search
     pub is_learned: bool,
+    is_active: bool
 }
 
 impl Clause {
@@ -27,7 +28,8 @@ impl Clause {
     pub fn new(terms: Vec<Literal>, is_learned: bool) -> Clause {
         let mut clause = Clause{
             literals: terms,
-            is_learned
+            is_learned,
+            is_active: true,
         };
 
         clause.literals.shrink_to_fit();
@@ -72,6 +74,16 @@ impl Clause {
             }
         }
         return false
+    }
+
+    pub fn deactivate(&mut self){
+        self.is_active = false;
+    }
+    pub fn activate(&mut self){
+        self.is_active = true;
+    }
+    pub fn is_active(&self) -> bool{
+        return self.is_active;
     }
 
 }
@@ -173,18 +185,4 @@ mod tests {
 
     //left: `Duration { secs: 0, nanos: 14010 }`,
     // right: `Duration { secs: 0, nanos: 316561 }
-    #[test]
-    fn remove_literals() {
-        let mut clause = Clause::new(vec![
-            Literal::from(1),
-            Literal::from(2),
-            Literal::from(4),
-            Literal::from(8)], false);
-        clause.remove_lit(Literal::from(2));
-        assert_eq!(*clause, vec![Literal::from(1),Literal::from(4),Literal::from(8)]);
-        clause.remove_lit(Literal::from(1));
-        assert_eq!(*clause, vec![Literal::from(4),Literal::from(8)]);
-        clause.remove_lit(Literal::from(8));
-        assert_eq!(*clause, vec![Literal::from(4)])
-    }
 }

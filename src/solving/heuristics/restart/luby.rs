@@ -61,18 +61,6 @@ impl Luby {
 mod tests {
     use super::*;
 
-    /*
-    #[test]
-    fn test_luby() {
-        let mut tested = Luby::new(100);
-
-        for i in 1..34{
-            println!("luby {} : {}", i, 100 << tested.luby())
-        }
-        assert_eq!(true,false);
-    }*/
-
-
     #[test]
     fn luby_generates_luby_sequence() {
         let mut tested = Luby::new(100);
@@ -91,99 +79,100 @@ mod tests {
         assert_eq!(tested.luby(), 1);
         assert_eq!(tested.luby(), 2);
         assert_eq!(tested.luby(), 4);
+
         assert_eq!(tested.luby(), 8);
     }
 
-    /*
+
     #[test]
     fn should_restart_follows_luby_sequence(){
         let mut tested = Luby::new(100);
 
         // 0
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(101), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(101, &vec![]), true);
 
         // 1
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(201), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(201, &vec![]), true);
 
         // 1
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(201), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(201, &vec![]), true);
 
         // 2
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(300), false);
-        assert_eq!(tested.should_restart(400), false);
-        assert_eq!(tested.should_restart(401), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(300, &vec![]), false);
+        assert_eq!(tested.should_restart(400, &vec![]), false);
+        assert_eq!(tested.should_restart(401, &vec![]), true);
 
         // 1
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(201), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(201, &vec![]), true);
 
         // 1
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(201), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(201, &vec![]), true);
 
         // 2
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(300), false);
-        assert_eq!(tested.should_restart(400), false);
-        assert_eq!(tested.should_restart(401), true);
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(300, &vec![]), false);
+        assert_eq!(tested.should_restart(400, &vec![]), false);
+        assert_eq!(tested.should_restart(401, &vec![]), true);
 
         // 4
         tested.set_next_limit();
 
-        assert_eq!(tested.should_restart(  1), false);
-        assert_eq!(tested.should_restart( 10), false);
-        assert_eq!(tested.should_restart( 99), false);
-        assert_eq!(tested.should_restart(100), false);
-        assert_eq!(tested.should_restart(200), false);
-        assert_eq!(tested.should_restart(300), false);
-        assert_eq!(tested.should_restart(400), false);
-        assert_eq!(tested.should_restart(500), false);
-        assert_eq!(tested.should_restart(600), false);
-        assert_eq!(tested.should_restart(700), false);
-        assert_eq!(tested.should_restart(800), false);
-        assert_eq!(tested.should_restart(801), false);
-    }*/
+        assert_eq!(tested.should_restart(  1, &vec![]), false);
+        assert_eq!(tested.should_restart( 10, &vec![]), false);
+        assert_eq!(tested.should_restart( 99, &vec![]), false);
+        assert_eq!(tested.should_restart(100, &vec![]), false);
+        assert_eq!(tested.should_restart(200, &vec![]), false);
+        assert_eq!(tested.should_restart(300, &vec![]), false);
+        assert_eq!(tested.should_restart(400, &vec![]), false);
+        assert_eq!(tested.should_restart(500, &vec![]), false);
+        assert_eq!(tested.should_restart(600, &vec![]), false);
+        assert_eq!(tested.should_restart(700, &vec![]), false);
+        assert_eq!(tested.should_restart(800, &vec![]), false);
+        assert_eq!(tested.should_restart(801, &vec![]), false);
+    }
 }

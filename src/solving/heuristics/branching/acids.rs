@@ -25,7 +25,7 @@ impl BranchingHeuristic for ACIDS {
         }
     }
 
-    /// updates the variable's score 
+    /// updates the variable's score
     ///
     /// # Panics
     /// - if the given variable does not fit in the range [1 .. capa]

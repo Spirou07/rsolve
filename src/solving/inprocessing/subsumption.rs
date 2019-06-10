@@ -56,6 +56,7 @@ pub fn subsume_without_lit(c1: &Clause, c2: &Clause, l: Literal) -> bool {
     }
     return true;
 }
+/*
 pub fn self_subsuming_resolution_forward(c1: &mut Clause, c2: &mut Clause) {
     if c1.len() > c2.len() {return;}
     let mut idx = 0;
@@ -73,7 +74,7 @@ pub fn self_subsuming_resolution_forward(c1: &mut Clause, c2: &mut Clause) {
         if c1.len() == c2.len(){c1.swap_remove(idx);}
         c2.remove_lit(l_remove);
     }
-}
+}*/
 /*
 fn subsume2(c1: &Clause2, c2: &Clause2) -> bool {
     if c1.len() > c2.len() {return false; }
@@ -137,27 +138,6 @@ fn self_subsuming_resolution_forward(c1: &mut Clause, c2: &mut Clause) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /*
-    #[test]
-    fn clause_subsumes_itself() {
-        let mut terms = vec![];
-        for i in 0..300 {
-            terms.insert(i,Literal::from(i as i32 +1));
-        }
-        let start_clause = PreciseTime::now();
-        let clause1 = Clause::new(terms.clone(), false);
-
-        let clause2 = Clause::new(terms.clone(), false);
-        let end_clause1 = PreciseTime::now();
-        let clause21 = Clause::new(terms.clone(), false);
-
-        let clause22 = Clause::new(terms.clone(), false);
-        let end_clause = PreciseTime::now();
-        //assert_eq!(start_clause.to(end_clause1), end_clause1.to(end_clause));
-        let start = PreciseTime::now();
-        assert_eq!(subsume(&clause1,&clause2), true);
-        assert_eq!(subsume(&clause2,&clause1), true);
-    }*/
     #[test]
     fn clause_does_not_subsumes() {
         let clause1 = Clause::new(vec![
@@ -262,36 +242,6 @@ mod tests {
             Literal::from(8)], false);
         assert_eq!(subsume_without_lit(&clause1, &clause2, Literal::from(10)), false)
     }
-
-    #[test]
-    fn self_subsuming_resolution_test() {
-        let mut clause1 = Clause::new(vec![
-            Literal::from(1),
-            Literal::from(-2),
-            Literal::from(4)], false);
-
-        let mut clause2 = Clause::new(vec![
-            Literal::from(1),
-            Literal::from(-2),
-            Literal::from(-4)], false);
-
-        let mut clause3 = Clause::new(vec![
-            Literal::from(1),
-            Literal::from(2),
-            Literal::from(5)], false);
-        self_subsuming_resolution_forward(&mut clause2, &mut clause3);
-        assert_eq!(*clause2, vec![Literal::from(1),Literal::from(-2), Literal::from(-4)]);
-        assert_eq!(*clause3, vec![Literal::from(1),Literal::from(2), Literal::from(5)]);
-
-        self_subsuming_resolution_forward(&mut clause1, &mut clause2);
-        assert_eq!(*clause1, vec![Literal::from(1),Literal::from(-2)]);
-        assert_eq!(*clause2, vec![Literal::from(1),Literal::from(-2)]);
-
-        self_subsuming_resolution_forward(&mut clause2, &mut clause3);
-        assert_eq!(*clause2, vec![Literal::from(1),Literal::from(-2)]);
-        assert_eq!(*clause3, vec![Literal::from(1), Literal::from(5)]);
-    }
-
 }
 
 

@@ -7,13 +7,13 @@ use std::usize;
 use core::*;
 use collections::*;
 use solving::*;
-use self::time::*;
+//use self::time::*;
 
 use self::fixedbitset::FixedBitSet;
 
 type  ClauseId = usize;
 const CLAUSE_ELIDED: ClauseId = usize::MAX;
-const CLAUSE_SUB: ClauseId = usize::MAX - 1;
+//const CLAUSE_SUB: ClauseId = usize::MAX - 1;
 
 type Conflict = ClauseId;
 type Reason   = ClauseId;
@@ -62,8 +62,8 @@ pub struct Solver {
 
     /// Glucose specific
     //restart_strat: Glucose, // HERE
-    restart_strat: Luby,
-    //restart_strat: InOut,
+    //restart_strat: Luby,
+    restart_strat: InOut,
 
     glucose_wind : Vec<u32>,
 
@@ -118,10 +118,12 @@ pub struct Solver {
     /// Bool to enable subsumption
     subsume_enable: bool,
     /// Activate LCM
-    LCM: bool,
+    lcm: bool,
+    /// Activate Preprocess
+    preprocess: bool,
     pub removed: usize,
+    rl: bool,
 
-    clause_to_remove: Vec<ClauseId>,
 }
 
 impl Solver {
@@ -147,8 +149,8 @@ impl Solver {
             max_learned: 1000,
             // HERE
             //restart_strat: Glucose::new(),
-            restart_strat: Luby::new(100),
-            //restart_strat: InOut::new(),
+            //restart_strat: Luby::new(100),
+            restart_strat: InOut::new(),
 
             glucose_size: 100, // change also next line !
             glucose_wind: Vec::with_capacity(100), // correspond to glucose_size
@@ -169,9 +171,10 @@ impl Solver {
             reason: VarIdxVec::with_capacity(nb_vars),
             flags: LitIdxVec::with_capacity(nb_vars),
             subsume_enable: false,
-            LCM: true, // HERE
+            lcm: false, // HERE
+            preprocess: false,
             removed: 0,
-            clause_to_remove: vec![],
+            rl: false,
         };
 
         // initialize vectors
@@ -201,30 +204,22 @@ impl Solver {
 	/// false if there exists no such assignment.
 	///
     pub fn solve(&mut self) -> bool {
-        if self.LCM {
+        if self.preprocess {
             self.preprocess();
-            self.clause_to_remove = vec![];
         }
         loop {
             if self.is_unsat { return false; }
-            self.remove_clauses_sub_by_unit();
             match self.propagate() {
                 Some(conflict) => {
                     self.nb_conflicts += 1;
                     self.nb_conflicts_since_restart += 1;
-/*
-                    if self.nb_conflicts % 1000 == 0 {
-                        println!("nb_conflict : {}", self.nb_conflicts);
-                    }
-*/
+
                     // if there is a conflict, I try to resolve it. But if I can't, that
                     // means that the problem is UNSAT
                     if self.resolve_conflict(conflict).is_err() {
                         self.is_unsat = true;
                         return false;
                     }
-                    self.remove_clauses_sub_by_unit();
-
 
                     if self.should_restart() {
                         self.restart();
@@ -400,11 +395,7 @@ impl Solver {
             if !self.flags[lit].is_set(Flag::IsMarked) { continue }
 
             marked_lit.push(lit);
-/*
-            if (*base_vec).contains(&lit) || lit.to_isize() == new_lit.to_isize(){
-                continue;
-            }
-*/
+
             // otherwise, we need to mark all the literal in its antecedent.
             match self.reason[lit.var()] {
                 // will never happen
@@ -535,7 +526,7 @@ impl Solver {
     fn restart(&mut self) {
         let pos = self.root();
         self.rollback(pos);
-        if self.LCM {
+        if self.lcm {
             self.clause_minimization();
         }
         self.restart_strat.set_next_limit();
@@ -666,6 +657,7 @@ impl Solver {
         self.prop_queue.resize(until, lit(iint::max_value()));
     }
 
+    /// Same as rollback but disable the phase_saving (for LCM).
     fn rollback_mini(&mut self, until: usize) {
         // Unravel the portion of the trail with literal that really should be rolled back
         let len = self.prop_queue.len();
@@ -785,19 +777,6 @@ impl Solver {
         let clause = Clause::new(literals, false);
 
         let result = self.add_clause( clause, false);
-/*
-        if self.subsume_enable {
-            match result {
-                Err(()) => {},
-                Ok(c) if c == CLAUSE_ELIDED => {},
-                Ok(c_id) => {
-                    if self.forward_subsumption_clause(result.unwrap()){
-                        return Ok(CLAUSE_ELIDED);
-                    }
-                }
-            }
-
-        }*/
 
         return result
 
@@ -817,19 +796,6 @@ impl Solver {
         let subsume = self.subsume_enable;
 
         let result = self.add_clause(Clause::new(c, true), subsume);
-
-        /*
-        if self.subsume_enable {
-            match result {
-                Err(()) => {},
-                Ok(c) if c == CLAUSE_ELIDED => {},
-                Ok(c_id) => {
-                    if self.forward_subsumption_clause(result.unwrap()){
-                        return Ok(CLAUSE_ELIDED);
-                    }
-                }
-            }
-        }*/
 
         if result.is_ok() && result.unwrap() != CLAUSE_ELIDED {
             self.nb_learned += 1;
@@ -954,25 +920,19 @@ impl Solver {
         self.lbd.push(u32::max_value());
 
 
-        if subsume {
+        if subsume { // Backward subsumption on creation
             let mut delete_clauses: Vec<ClauseId> = vec![];
             for clause_id in (self.clauses.len() - self.nb_learned)..self.clauses.len() - 1 {
-                if self.subsuming_backward(clause_id, c_id)
-                    && !delete_clauses.contains(&clause_id) {
+                let clause = &(self.clauses[c_id]);
+                let clause2 = &(self.clauses[clause_id]);
+
+                if inprocessing::subsume(clause, clause2) {
                     delete_clauses.push(clause_id);
                 }
-
-                //self.self_subsuming_resolution_forward( c_id, clause_id)
             }
 
             for cl_del in delete_clauses {
                 self.remove_clause(cl_del);
-            }
-        }
-
-        if subsume{
-            if self.forward_subsumption_clause(c_id){
-                return Ok(CLAUSE_SUB);
             }
         }
 
@@ -1027,12 +987,11 @@ impl Solver {
         self.nb_minimization += 1;
     }
 
+    /// This Function preprocesses the problem clauses before the search
+    /// It is currently the LCM algorithm on the problem clauses.
+    /// The removal of clauses which have a forced literal can be added.
     pub fn preprocess(&mut self){
         let mut remove_clauses = vec![];
-        println!("start preprocess len {}", self.clauses.len());
-
-        //self.remove_clause_with_lit_forced();
-        //self.forward_subsumption();
 
         for clause_id in 0..self.clauses.len(){
             if self.clauses[clause_id].len() > 30 || self.lbd[clause_id] > 6 {
@@ -1046,7 +1005,8 @@ impl Solver {
 
             let conflict = self.propagate();
             if conflict.is_some(){
-                panic!("conflict on LCM 1");
+                // should not happen
+                panic!("conflict on preprocess 1");
             }
 
             let rollback_clause = self.prop_queue.len();
@@ -1056,28 +1016,30 @@ impl Solver {
                 let lite = self.clauses[clause_id][i];
                 let conflict = self.propagate();
                 if conflict.is_some(){
-                    panic!("conflict on LCM 2");
+                    panic!("conflict on preprocess 2");
                 }
+
                 match self.get_value(lite) {
                     Bool::True  => {
-                        // Learned clause is a TAUTOLOGY
-                        if i == 0 {
+                        // clause is a TAUTOLOGY
+                        if i == 0 { // first literal yet assigned
                             added = true;
                             remove_clauses.push(clause_id);
                             break;
                         }
                         minimized_c.push(lite);
-                        for j in (i+1..clause.len()).rev(){
+                        for j in (i+1..clause.len()).rev(){ // remove all the other literals
                             self.clauses[clause_id].swap_remove(j);
                         }
                         break;
                     },
-                    Bool::False => {
+                    Bool::False => { // Cannot lead to a conflict
                         remove_lit.push(i);
                         continue;},
                     Bool::Undef => {
                         let rollback_ass = self.prop_queue.len();
 
+                        // First assign the opposite
                         self.assign(-lite, None).ok();
 
                         let conflict = self.propagate();
@@ -1097,6 +1059,7 @@ impl Solver {
                             break;
                         } else {
                             self.rollback_mini(rollback_ass);
+                            // Secondly assign the positive literal
                             self.assign(lite, None).ok();
                             let conflict = self.propagate();
                             self.rollback_mini(rollback_ass);
@@ -1113,11 +1076,14 @@ impl Solver {
 
             // DO NOT ADD ROLLBACK HERE
 
-            if !added {
+            if !added { // clause should be kept
                 self.rollback_mini(rollback_clause);
                 if minimized_c.len() != 0 {
                     if minimized_c.len() == 1 {
-                        self.add_learned_clause(minimized_c);
+                        if self.add_learned_clause(minimized_c).is_err(){
+                            // should not happen
+                            panic!();
+                        }
                         remove_clauses.push(clause_id);
                     } else {
 
@@ -1133,13 +1099,11 @@ impl Solver {
             }
         }
         for i in (0..remove_clauses.len()).rev(){
-            //panic!("not all removed");
             self.remove_clause(remove_clauses[i]);
         }
-        println!("end preprocess len {}", self.clauses.len());
     }
 
-
+    /// The actual function to minimize the learned clauses
     fn minimize_l(&mut self){
         let mut remove_clauses = vec![];
         for clause_id in self.clauses.len()-self.nb_learned_since_minimiation..self.clauses.len(){
@@ -1154,6 +1118,7 @@ impl Solver {
 
             let conflict = self.propagate();
             if conflict.is_some(){
+                // should not happen
                 panic!("conflict on LCM 1");
             }
 
@@ -1164,74 +1129,34 @@ impl Solver {
                 let lite = self.clauses[clause_id][i];
                 let conflict = self.propagate();
                 if conflict.is_some(){
+                    // should not happen
                     panic!("conflict on LCM 2");
                 }
                 match self.get_value(lite) {
                     Bool::True  => {
                         // Learned clause is a TAUTOLOGY
-                        if i == 0 {
+                        if i == 0 { // first literal yet assigned
                             added = true;
                             remove_clauses.push(clause_id);
                             break;
                         }
                         minimized_c.push(lite);
-                        for j in (i+1..clause.len()).rev(){
+                        for j in (i+1..clause.len()).rev(){ // remove all the other literals
                             self.clauses[clause_id].swap_remove(j);
                         }
                         break;
-                        /*
-                        self.rollback(rollback_clause);
-                        self.activate_clause(clause_id);
-                        added = true;
-                        remove_clauses.push(clause_id);*/
-
-/*
-                        let reason = self.reason[lite.var()];
-                        if self.reason[lite.var()] == None{
-                            panic!("reason none");
-                        } else if reason.unwrap() == CLAUSE_ELIDED {
-                            self.rollback(rollback_clause);
-                            self.activate_clause(clause_id);
-                            added = true;
-                            break;
-                        }
-                        else {
-                            let mut vec = self.conflict_analysis(reason.unwrap(),
-                                                             &minimized_c,
-                                                             lite, rollback_clause);
-
-                            vec.push(lite);
-                            self.rollback(rollback_clause);
-                            if vec.len() == 0{
-                                panic!("len 0");
-                            }
-
-                            self.activate_clause(clause_id);
-                            added = true;
-                            break;
-
-                            self.add_learned_clause(vec).ok();
-                            remove_clauses.push(clause_id);
-                            added = true;
-                            break;
-                        }*/
                     },
-                    Bool::False => {
+                    Bool::False => { // Cannot lead to a conflict
                         remove_lit.push(i);
                         continue;},
                     Bool::Undef => {
                         let rollback_ass = self.prop_queue.len();
 
+                        // First assign the opposite
                         self.assign(-lite, None).ok();
 
                         let conflict = self.propagate();
                         if conflict.is_some() {
-                            /*
-                            self.rollback_mini(rollback_clause);
-                            self.activate_clause(clause_id);
-                            added = true;
-                            break;
-                            */
                             let vec = self.conflict_analysis(conflict.unwrap(),
                                                              &minimized_c,
                                                              lite, rollback_clause);
@@ -1247,6 +1172,7 @@ impl Solver {
                             break;
                         } else {
                             self.rollback_mini(rollback_ass);
+                            // Secondly assign the positive literal
                             self.assign(lite, None).ok();
                             let conflict = self.propagate();
                             self.rollback_mini(rollback_ass);
@@ -1267,7 +1193,10 @@ impl Solver {
                 self.rollback_mini(rollback_clause);
                 if minimized_c.len() != 0 {
                     if minimized_c.len() == 1 {
-                        self.add_learned_clause(minimized_c);
+                        if self.add_learned_clause(minimized_c).is_err(){
+                            // should not happen
+                            panic!();
+                        }
                         remove_clauses.push(clause_id);
                     } else {
 
@@ -1275,25 +1204,6 @@ impl Solver {
                             self.clauses[clause_id].swap_remove(*l);
                         }
 
-/*
-                        for i in (0..self.clauses[clause_id].len()).rev() {
-                            if !minimized_c.contains(&self.clauses[clause_id][i]){
-                                self.clauses[clause_id].swap_remove(i);
-                            }
-                        }
-                        */
-/*
-                        for i in minimized_c.clone() {
-                            if !self.clauses[clause_id].contains(&i){
-                                /*
-                                println!("{}", format!("{:?}", clause));
-                                println!("{}", format!("{:?}", clause_after));
-                                println!("{}", format!("{:?}",minimized_c));
-                                */
-                                panic!("not same");
-                            }
-                        }
-                        */
                         self.activate_clause(clause_id);
                     }
                 } else {
@@ -1303,10 +1213,8 @@ impl Solver {
             }
         }
         for i in (0..remove_clauses.len()).rev(){
-            //panic!("not all removed");
             self.remove_clause(remove_clauses[i]);
         }
-        self.clause_to_remove = vec![];
     }
 
     // -------------------------------------------------------------------------------------------//
@@ -1499,51 +1407,16 @@ impl Solver {
                         if self.nb_decisions == 0 {
                             self.flags[lit].set(Flag::IsForced);
                             self.forced += 1;
-                            self.remove_clause_with_lit(lit, c_id);
-                            //println!("forcing : {}", format!("{:?}", lit));
+                            if self.rl {
+                                self.remove_clause_with_lit(lit, c_id);
+                            }
                         }
                     }
                 }
-
-
-
                 Ok(())
             }
         }
     }
-
-    fn assign_mini(&mut self, lit: Literal, reason: Option<Reason>) -> Result<(), ()> {
-        match self.get_value(lit) {
-            Bool::True  => Ok(()),
-            Bool::False => Err(()),
-            Bool::Undef => {
-                self.set_value(lit, Bool::True);
-                self.reason[lit.var()] = reason;
-                self.prop_queue.push(!lit);
-
-
-                // if its a decision, make sure to take that into account
-                if reason.is_none() {
-                    self.nb_decisions += 1;
-                }
-
-                // Level can only be set now that the nb_decisions has been updated if need be
-                self.level [lit.var()] = self.nb_decisions;
-
-                match reason {
-                    None      => {/* it cant be bumped */},
-                    Some(c_id)=> {
-                        if c_id != CLAUSE_ELIDED {
-                            self.clause_bump(c_id);
-                        }
-                    }
-                }
-
-                Ok(())
-            }
-        }
-    }
-
 
     /// This method propagates the information about all the literals that have been
     /// enqueued. It returns an optional conflicting clause whenever conflict is detected
@@ -1602,35 +1475,30 @@ impl Solver {
     // -------------------------------------------------------------------------------------------//
     // ---------------------------- Subsumption --------------------------------------------------//
     // -------------------------------------------------------------------------------------------//
+    /// This method remove all the clauses that have a forced literal
     fn remove_clause_with_lit_forced(&mut self){
         for j in 0..self.forced{
             let lit = !self.prop_queue[j];
             self.remove_clause_with_lit(lit, 0);
         }
     }
+
+    /// This method find and remove all clauses that have the forced literal lit, excpect clause c_id
     fn remove_clause_with_lit(&mut self, lit: Literal, c_id: usize){
+        let mut clauses_to_remove = vec![];
         for j in (0..self.clauses.len()).rev(){
             let clause = &*(self.clauses[j]);
             if j != c_id && clause.contains(&lit){
-                self.clause_to_remove.push(j);
+                clauses_to_remove.push(j);
                 self.removed += 1;
             }
         }
-    }
-    fn remove_clauses_sub_by_unit(&mut self){
-        self.clause_to_remove.sort();
-        let mut last = 0;
-        for i in (0..self.clause_to_remove.len()).rev(){
-            let c_id = self.clause_to_remove[i];
-            if c_id != last {
-                //println!("removing {}", c_id);
-                self.remove_clause(c_id);
-                last = c_id;
-            }
+        for i in clauses_to_remove {
+            self.remove_clause(i);
         }
-        self.clause_to_remove = vec![];
-        //println!("end remove");
     }
+
+    /// Backward subsumption with 2 indexes
     fn subsuming_backward(&mut self, id1: usize, id2: usize) -> bool {
         assert_ne!(id1,id2);
         let c1 = &self.clauses[id1];
@@ -1644,23 +1512,28 @@ impl Solver {
         }
         return true;
     }
-    /*
-    fn subsumption(&mut self){
-        for id in 0..self.clauses.len(){
-            let clause = &(self.clauses[id]);
-            if clause.len() > 20 || !clause.is_active(){
-                continue;
-            }
-            for id2 in 0..self.clauses.len(){
 
-                let mut clause2 = &(self.clauses[id2]);
-                if clause2.is_active() && id != id2 && inprocessing::subsume(clause,clause2){
-                    clause2.deactivate();
+    /// Backward subsumption on all the learned clauses
+    pub fn backward_subsumption(&mut self){
+        let mut clauses_to_remove = vec![];
+        for id in (0..self.clauses.len()).rev() {
+            for id2 in (self.clauses.len()-self.nb_learned..self.clauses.len()).rev(){
+                if id != id2{
+                    let clause = &(self.clauses[id]);
+                    let clause2 = &(self.clauses[id2]);
+                    if inprocessing::subsume(clause,clause2) && !clauses_to_remove.contains(&id2) {
+                        clauses_to_remove.push(id2);
+                    }
                 }
             }
         }
-    }*/
+        clauses_to_remove.sort();
+        for id in (0..clauses_to_remove.len()).rev(){
+            self.remove_clause(clauses_to_remove[id]);
+        }
+    }
 
+    /// Forward subsumption with one clause index
     fn forward_subsumption_clause(&mut self, clause_id: ClauseId) -> bool{
         for id2 in (0..self.clauses.len()).rev(){
             let clause2 = &(self.clauses[id2]);
@@ -1674,8 +1547,9 @@ impl Solver {
 
     }
 
+    /// Forward subsumption on all the learned clauses
     pub fn forward_subsumption(&mut self){
-        for id in (0..self.clauses.len()).rev() {
+        for id in (self.clauses.len()-self.nb_learned..self.clauses.len()).rev() {
             let mut del = false;
             for id2 in (0..self.clauses.len()).rev(){
                 if id != id2{
@@ -1689,46 +1563,8 @@ impl Solver {
                 }
             }
         }
-
-
     }
 
-    fn subsuming_forward(&mut self, id1: usize, id2: usize) -> bool{
-        return self.subsuming_backward(id2,id1);
-    }
-    /*
-    fn self_subsuming_resolution_forward(&mut self, id1: usize, id2: usize){
-        assert_ne!(id1,id2);
-        let mut found = false;
-        let mut cond = false;
-        let mut l_remove: Literal = Literal::from(42);
-        {
-            let ref mut tab = self.clauses;
-            let ref c1 = tab[id1];
-            let ref c2 = tab[id2];
-            if c1.len() > c2.len() {return;} // TODO : directly call reverse ?
-            for lit in c1.iter(){
-                if c2.contains_lit(Literal::from_var(lit.var(), -lit.sign())) && subsumption::subsume_without_lit(c1,c2,*lit){
-                    found = true;
-                    l_remove = Literal::from_var(lit.var(), -lit.sign());
-                    break;
-                }
-            }
-            cond = c1.len() == c2.len();
-        }
-        if found {
-            if cond{
-                let ref mut c1 = self.clauses[id1];
-                if self.watchers[l_remove].contains(&id1){
-                    //self.find_new_literal(id1, l_remove)
-                }
-                c1.remove_lit(Literal::from_var(l_remove.var(), -l_remove.sign()));
-            }
-            let ref mut c2 = self.clauses[id2];
-            c2.remove_lit(l_remove);
-        }
-        return;
-    }*/
 
     // -------------------------------------------------------------------------------------------//
     // ---------------------------- MISC ---------------------------------------------------------//
@@ -2696,30 +2532,6 @@ mod tests {
     }
 
     #[test]
-    fn test_first_UIP(){
-        let mut solver = SOLVER::new(9);
-
-        solver.add_problem_clause(&mut vec![ 1, 2]);
-        solver.add_problem_clause(&mut vec![ 1,3,7]);
-        solver.add_problem_clause(&mut vec![ -2,-3,4]);
-        solver.add_problem_clause(&mut vec![ -4,5,8]);
-        solver.add_problem_clause(&mut vec![ -4,6,9]);
-        solver.add_problem_clause(&mut vec![ -5,-6]);
-
-        assert!(solver.assign(lit(-7), None).is_ok());
-        assert!(solver.assign(lit(-8), None).is_ok());
-        assert!(solver.assign(lit(-9), None).is_ok());
-        assert!(solver.assign(lit(-1), None).is_ok());
-
-        let conflict = solver.propagate();
-        let uip = solver.find_first_uip(conflict.unwrap());
-        let clause = solver.build_conflict_clause(uip);
-
-        assert_eq!("[Literal(3)]", format!("{:?}", clause));
-    }
-
-    // buildConflictClause exemple not first and not decision
-    #[test]
     fn build_conflict_clause_exemple_not_decision_deeper_down(){
         /*-
          * 1 ---+     +- 5 -\
@@ -2876,17 +2688,20 @@ mod tests {
     fn subsumption(){
         let mut solver = SOLVER::new(6);
 
-        solver.add_problem_clause(&mut vec![ 1, 2,-3]);
-        solver.add_problem_clause(&mut vec![ -3, 1]);
-        solver.add_problem_clause(&mut vec![ 3,-5]);
-        solver.add_problem_clause(&mut vec![ 4, 5]);
-        solver.add_problem_clause(&mut vec![ 4, 5,-6]);
+        solver.add_learned_clause(vec![ lit(1), lit(2),lit(-3)]);
+        solver.add_learned_clause(vec![ lit(-3), lit(1)]);
+        solver.add_learned_clause(vec![ lit(3),lit(-5)]);
+        solver.add_learned_clause(vec![ lit(4), lit(5)]);
+        solver.add_learned_clause(vec![ lit(4), lit(5),lit(-6)]);
 
         assert_eq!(5, solver.clauses.len());
         solver.forward_subsumption();
+        for i in 0..solver.clauses.len(){
+            println!("{}", format!("{:?}", solver.clauses[i]));
+        }
         assert_eq!("Clause([Literal(4), Literal(5)])",
                    &format!("{:?}", solver.clauses[0]));
-        assert_eq!("Clause([Literal(1), Literal(-3)])",
+        assert_eq!("Clause([Literal(-3), Literal(1)])",
                    &format!("{:?}", solver.clauses[1]));
         assert_eq!("Clause([Literal(3), Literal(-5)])",
                    &format!("{:?}", solver.clauses[2]));
@@ -2895,33 +2710,6 @@ mod tests {
         assert_eq!("Clause([Literal(4), Literal(5)])",
                    &format!("{:?}", solver.clauses[0]));
     }
-/*
-    #[test]
-    fn restart_should_not_rollback_unit_learned_clauses(){
-        let mut solver = SOLVER::new(6);
-
-        solver.add_problem_clause(&mut vec![ 1, 2,-3]);
-        solver.add_problem_clause(&mut vec![ 3,-4]);
-        solver.add_problem_clause(&mut vec![ 3,-5]);
-        solver.add_problem_clause(&mut vec![ 4, 5, 6]);
-        solver.add_problem_clause(&mut vec![ 4, 5,-6]);
-
-        solver.assign(lit(3), None);
-        solver.rollback(0);
-        solver.add_learned_clause(vec![lit(4)]);
-        solver.add_learned_clause(vec![lit(5)]);
-        solver.add_learned_clause(vec![lit(6)]);
-
-        solver.restart();
-        solver.propagate();
-
-        assert_eq!(solver.get_value(lit(4)), Bool::True);
-        assert_eq!(solver.get_value(lit(5)), Bool::True);
-        assert_eq!(solver.get_value(lit(6)), Bool::True);
-        //assert_eq!(true,false)
-
-    }
-    */
 
     #[test]
     fn find_backjump_point_must_rollback_everything_when_the_learned_clause_is_unit(){
@@ -3041,6 +2829,22 @@ mod tests {
         let clause = solver.build_conflict_clause(uip);
         assert_eq!("[Literal(3), Literal(1)]", format!("{:?}", clause));
         assert_eq!(2, solver.find_backjump_point(uip));
+    }
+
+    #[test]
+    fn minimize_l_should_minimize() {
+        let mut solver = SOLVER::new(5);
+
+
+        solver.add_learned_clause(vec![ lit(1),lit(-4)]);
+        solver.add_learned_clause(vec![ lit(1)]);
+        solver.add_learned_clause(vec![ lit(2),lit(-3)]);
+        solver.add_learned_clause(vec![ lit(4),lit(-5)]);
+        solver.add_learned_clause(vec![ lit(2),lit(-3), lit(-1), lit(-5)]);
+
+        solver.minimize_l();
+        assert_eq!(3,solver.clauses.len());
+
     }
 
     #[test]
@@ -3343,21 +3147,23 @@ mod tests {
         assert_eq!(2, solver.clauses.len());
         assert!(! solver.clauses[0].is_learned);
     }
-/*
+
     #[test]
     fn reduce_db_does_not_remove_clauses_of_size_2_or_less(){
+        // This test won't succeed if self.rl is set to True
         let mut solver = SOLVER::new(5);
         solver.add_learned_clause(vec![lit(1), lit(3)]);
         solver.add_learned_clause(vec![lit(2), lit(3)]);
         solver.add_learned_clause(vec![lit(4), lit(3)]);
         solver.add_learned_clause(vec![lit(5), lit(3)]);
+        assert_eq!(4, solver.clauses.len());
         solver.add_learned_clause(vec![lit(3)]); // ELIDED
 
         assert_eq!(4, solver.clauses.len());
         solver.reduce_db();
         assert_eq!(4, solver.clauses.len());
     }
-    */
+
 
     #[test]
     fn reduce_db_tries_to_removes_half_of_the_clauses(){
@@ -3523,9 +3329,10 @@ mod tests {
         assert_eq!(&solver.watchers[lit(5)], &vec![ ]);
         assert_eq!(&solver.watchers[lit(6)], &vec![2]);
     }
-/*
+
     #[test]
     fn remove_clause_must_erase_its_locking_reason_if_there_is_one(){
+        // This test won't succeed if self.rl is set to True
         let mut solver = SOLVER::new(6);
         solver.add_learned_clause(vec![lit(1), lit(3), lit(5)]); // c0
         solver.add_learned_clause(vec![lit(2), lit(3), lit(5)]); // c1
@@ -3557,10 +3364,11 @@ mod tests {
         assert!   (!solver.is_locked(2));
         assert_eq!(solver.reason[var(4)], None);
     }
-    */
-/*
+
+
     #[test]
     fn remove_clause_must_redirect_the_reason_of_the_last_clause(){
+        // This test won't succeed if self.rl is set to True
         let mut solver = SOLVER::new(6);
         solver.add_learned_clause(vec![lit(1), lit(3), lit(5)]); // c0
         solver.add_learned_clause(vec![lit(2), lit(3), lit(5)]); // c1
@@ -3592,7 +3400,7 @@ mod tests {
         assert!   (solver.is_locked(2));
         assert_eq!(solver.reason[var(6)], Some(2));
     }
-*/
+
     #[test]
     fn remove_clause_must_not_redirect_watchers_when_the_last_clause_is_removed(){
         let mut solver = SOLVER::new(6);

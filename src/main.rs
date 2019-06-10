@@ -4,7 +4,7 @@ extern crate argparse;
 extern crate xz2;
 extern crate bzip2;
 extern crate flate2;
-
+extern crate time;
 use rsolve::*;
 
 use argparse::*;
@@ -14,6 +14,7 @@ use std::fs::File;
 use xz2::bufread::XzDecoder;
 use bzip2::bufread::BzDecoder;
 use flate2::bufread::GzDecoder;
+//use time::PreciseTime;
 
 use std::time::*;
 
@@ -45,7 +46,16 @@ fn main() {
     let mut solver = parse_header(&mut lines);
 
     solver.drat = args.drat;
+    /*
+    println!("start load clauses");
+    let start = PreciseTime::now();
+    */
     load_clauses(&mut solver, &mut lines);
+    // solver.preprocess(); TODO
+    println!("clauses : {}", solver.clauses.len());
+    /*
+    let end = PreciseTime::now();
+    println!("end load clauses {}", start.to(end));*/
 
     let satisfiable = solver.solve();
 
@@ -81,6 +91,7 @@ fn print_result(solver: &Solver, config: &CliArgs, satisfiable: bool, elapsed: &
     println!("c nb_conflicts {}"  , solver.nb_conflicts);
     println!("c nb_restarts  {}"  , solver.nb_restarts);
     println!("c elapsed time {:.3} s", elapsed_time);
+    println!("c removed {}", solver.removed);
     println!("c ******************************************************************************");
 }
 
